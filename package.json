@@ -1,0 +1,21 @@
+{
+  "name": "autosales",
+  "private": true,
+  "scripts": {
+    "build": "turbo build",
+    "dev": "turbo dev",
+    "lint": "turbo lint",
+    "typecheck": "turbo typecheck",
+    "db:generate": "pnpm --filter @autosales/db generate",
+    "db:migrate": "pnpm --filter @autosales/db migrate",
+    "db:push": "pnpm --filter @autosales/db push"
+  },
+  "devDependencies": {
+    "turbo": "^2.3.0",
+    "typescript": "^5.7.0"
+  },
+  "packageManager": "pnpm@10.33.0",
+  "engines": {
+    "node": ">=20"
+  }
+}
