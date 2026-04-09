@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { exchangeCodeForTokens, GraphClient } from "@autosales/mail";
 import { db, oauthAccounts } from "@autosales/db";
-import { eq } from "drizzle-orm";
+import { eq, sql } from "drizzle-orm";
 import { createSessionToken, setSessionCookie, isAllowedEmail } from "@/lib/auth";
 
 function resolveBaseUrl(request: NextRequest): string {
@@ -32,6 +32,23 @@ export async function GET(request: NextRequest) {
   }
 
   try {
+    // Ensure oauth_accounts table exists before trying to use it
+    await db.execute(sql`
+      CREATE TABLE IF NOT EXISTS oauth_accounts (
+        id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+        provider VARCHAR(50) NOT NULL,
+        provider_account_id VARCHAR(255),
+        access_token TEXT,
+        refresh_token TEXT,
+        token_expires_at TIMESTAMPTZ,
+        email VARCHAR(255),
+        delta_token TEXT,
+        last_synced_at TIMESTAMPTZ,
+        created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+        updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+      )
+    `);
+
     const tokens = await exchangeCodeForTokens(code);
     const client = new GraphClient(tokens.access_token);
     const profile = await client.getProfile();

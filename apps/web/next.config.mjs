@@ -1,9 +1,13 @@
 import { execSync } from "child_process";
 
-let gitHash = "dev";
+let gitHash = process.env.RAILWAY_GIT_COMMIT_SHA?.slice(0, 7) || "dev";
 try {
-  gitHash = execSync("git rev-parse --short HEAD").toString().trim();
+  if (gitHash === "dev") {
+    gitHash = execSync("git rev-parse --short HEAD").toString().trim();
+  }
 } catch {}
+
+const buildTime = new Date().toLocaleString("en-US", { timeZone: "America/Chicago", dateStyle: "short", timeStyle: "short" });
 
 /** @type {import('next').NextConfig} */
 const nextConfig = {
@@ -14,9 +18,9 @@ const nextConfig = {
   },
   env: {
     BUILD_VERSION: gitHash,
-    BUILD_TIME: new Date().toISOString(),
+    BUILD_TIME: buildTime,
     NEXT_PUBLIC_BUILD_VERSION: gitHash,
-    NEXT_PUBLIC_BUILD_TIME: new Date().toISOString(),
+    NEXT_PUBLIC_BUILD_TIME: buildTime,
   },
 };
 
