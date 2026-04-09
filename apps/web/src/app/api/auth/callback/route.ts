@@ -94,7 +94,11 @@ export async function GET(request: NextRequest) {
     await setSessionCookie(sessionToken);
     return NextResponse.redirect(new URL("/", baseUrl));
   } catch (err) {
-    console.error("Auth callback error:", err);
-    return NextResponse.redirect(new URL("/login?error=auth_failed", baseUrl));
+    const errorMessage = err instanceof Error ? err.message : String(err);
+    console.error("Auth callback error:", errorMessage);
+    console.error("Full error:", err);
+    // Pass error detail in URL for debugging (remove in production later)
+    const errorParam = encodeURIComponent(errorMessage.slice(0, 200));
+    return NextResponse.redirect(new URL(`/login?error=auth_failed&detail=${errorParam}`, baseUrl));
   }
 }

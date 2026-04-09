@@ -1,9 +1,21 @@
 import { getSession } from "@/lib/auth";
 import { redirect } from "next/navigation";
 
-export default async function LoginPage() {
+export default async function LoginPage({
+  searchParams,
+}: {
+  searchParams: { error?: string; detail?: string };
+}) {
   const session = await getSession();
   if (session) redirect("/");
+
+  const errorMessages: Record<string, string> = {
+    config: "Microsoft OAuth is not configured. Check environment variables.",
+    unauthorized: "Your Microsoft account is not authorized to access this app.",
+    auth_failed: "Authentication failed. See details below.",
+    no_email: "Could not retrieve email from Microsoft account.",
+    no_code: "No authorization code received from Microsoft.",
+  };
 
   return (
     <div className="min-h-screen flex items-center justify-center bg-muted">
@@ -12,6 +24,19 @@ export default async function LoginPage() {
         <p className="text-muted-foreground mb-8 text-sm">
           Group Health Brokerage AI Platform
         </p>
+
+        {searchParams.error && (
+          <div className="mb-6 p-3 bg-red-50 border border-red-200 rounded text-left">
+            <p className="text-sm text-red-800 font-medium">
+              {errorMessages[searchParams.error] || searchParams.error}
+            </p>
+            {searchParams.detail && (
+              <p className="text-xs text-red-600 mt-1 break-all">
+                {decodeURIComponent(searchParams.detail)}
+              </p>
+            )}
+          </div>
+        )}
 
         <a
           href="/api/auth/login"
