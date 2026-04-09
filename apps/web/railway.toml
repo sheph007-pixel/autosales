@@ -1,10 +1,10 @@
 [build]
 builder = "nixpacks"
-buildCommand = "cd ../.. && pnpm install --frozen-lockfile && pnpm turbo build --filter=web..."
+buildCommand = "pnpm install --frozen-lockfile && pnpm turbo build --filter=web... && cp -r apps/web/.next/static apps/web/.next/standalone/apps/web/.next/static"
 
 [deploy]
-startCommand = "node apps/web/.next/standalone/server.js"
+startCommand = "HOSTNAME=0.0.0.0 node apps/web/.next/standalone/apps/web/server.js"
 healthcheckPath = "/api/health"
-healthcheckTimeout = 30
+healthcheckTimeout = 60
 restartPolicyType = "ON_FAILURE"
 restartPolicyMaxRetries = 5

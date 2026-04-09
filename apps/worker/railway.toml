@@ -1,6 +1,6 @@
 [build]
 builder = "nixpacks"
-buildCommand = "cd ../.. && pnpm install --frozen-lockfile && pnpm turbo build --filter=worker..."
+buildCommand = "pnpm install --frozen-lockfile && pnpm turbo build --filter=worker..."
 
 [deploy]
 startCommand = "node apps/worker/dist/index.js"
