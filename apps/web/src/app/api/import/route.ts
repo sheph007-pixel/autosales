@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
-import { db, companies, contacts } from "@autosales/db";
-import { eq, sql } from "drizzle-orm";
+import { db } from "@autosales/db";
+import { sql } from "drizzle-orm";
 import { isPersonalDomain, normalizeEmail, extractNameFromEmail } from "@autosales/core";
 import { ensureTables } from "@autosales/db";
 
@@ -27,6 +27,20 @@ export async function POST(request: NextRequest) {
   try {
     await ensureTables();
     await db.execute(sql`ALTER TABLE contacts ADD COLUMN IF NOT EXISTS metadata JSONB DEFAULT '{}'`);
+    await db.execute(sql`ALTER TABLE contacts ADD COLUMN IF NOT EXISTS status VARCHAR(50) NOT NULL DEFAULT 'active'`);
+    await db.execute(sql`ALTER TABLE contacts ADD COLUMN IF NOT EXISTS phone VARCHAR(50)`);
+    await db.execute(sql`ALTER TABLE contacts ADD COLUMN IF NOT EXISTS title VARCHAR(255)`);
+    await db.execute(sql`ALTER TABLE contacts ADD COLUMN IF NOT EXISTS do_not_contact BOOLEAN NOT NULL DEFAULT false`);
+    await db.execute(sql`ALTER TABLE contacts ADD COLUMN IF NOT EXISTS last_contacted_at TIMESTAMPTZ`);
+    await db.execute(sql`ALTER TABLE contacts ADD COLUMN IF NOT EXISTS last_replied_at TIMESTAMPTZ`);
+    await db.execute(sql`ALTER TABLE companies ADD COLUMN IF NOT EXISTS renewal_month INTEGER`);
+    await db.execute(sql`ALTER TABLE companies ADD COLUMN IF NOT EXISTS has_group_health_plan BOOLEAN`);
+    await db.execute(sql`ALTER TABLE companies ADD COLUMN IF NOT EXISTS interest_status VARCHAR(50) DEFAULT 'unknown'`);
+    await db.execute(sql`ALTER TABLE companies ADD COLUMN IF NOT EXISTS do_not_contact BOOLEAN NOT NULL DEFAULT false`);
+    await db.execute(sql`ALTER TABLE companies ADD COLUMN IF NOT EXISTS summary TEXT`);
+    await db.execute(sql`ALTER TABLE companies ADD COLUMN IF NOT EXISTS next_action_at TIMESTAMPTZ`);
+    await db.execute(sql`ALTER TABLE companies ADD COLUMN IF NOT EXISTS last_activity_at TIMESTAMPTZ`);
+    await db.execute(sql`ALTER TABLE companies ADD COLUMN IF NOT EXISTS status VARCHAR(50) NOT NULL DEFAULT 'prospect'`);
 
     const body = (await request.json()) as ImportPayload;
     const { headers, rows, emailColumn } = body;
@@ -103,25 +117,25 @@ export async function POST(request: NextRequest) {
         // Get or create company
         let companyId = companyCache.get(domain);
         if (!companyId) {
-          const [existing] = await db.select().from(companies).where(eq(companies.domain, domain)).limit(1);
+          const companyRows = await db.execute(sql`SELECT id, company_name, renewal_month FROM companies WHERE domain = ${domain} LIMIT 1`);
+          const existing = (companyRows as unknown as Array<{id: string; company_name: string | null; renewal_month: number | null}>)[0];
 
           if (existing) {
             companyId = existing.id;
-            if (detectedCompany && !existing.companyName) {
-              await db.update(companies).set({ companyName: detectedCompany, updatedAt: new Date() }).where(eq(companies.id, existing.id));
+            if (detectedCompany && !existing.company_name) {
+              await db.execute(sql`UPDATE companies SET company_name = ${detectedCompany}, updated_at = now() WHERE id = ${existing.id}::uuid`);
             }
-            if (detectedRenewal && !existing.renewalMonth) {
-              await db.update(companies).set({ renewalMonth: detectedRenewal, updatedAt: new Date() }).where(eq(companies.id, existing.id));
+            if (detectedRenewal && !existing.renewal_month) {
+              await db.execute(sql`UPDATE companies SET renewal_month = ${detectedRenewal}, updated_at = now() WHERE id = ${existing.id}::uuid`);
             }
           } else {
-            const [created] = await db.insert(companies).values({
-              domain,
-              companyName: detectedCompany || null,
-              status: "prospect",
-              interestStatus: "unknown",
-              renewalMonth: detectedRenewal,
-            }).returning();
-            companyId = created!.id;
+            const created = await db.execute(sql`
+              INSERT INTO companies (domain, company_name, status, interest_status, renewal_month, created_at, updated_at)
+              VALUES (${domain}, ${detectedCompany || null}, 'prospect', 'unknown', ${detectedRenewal}, now(), now())
+              RETURNING id
+            `);
+            const createdRow = (created as unknown as Array<{id: string}>)[0];
+            companyId = createdRow!.id;
             createdCompanies++;
           }
           companyCache.set(domain, companyId);
@@ -131,11 +145,11 @@ export async function POST(request: NextRequest) {
         const normalizedEmail = normalizeEmail(email);
         const metadataJson = JSON.stringify(allData);
 
-        const [existingContact] = await db.select().from(contacts).where(eq(contacts.email, normalizedEmail)).limit(1);
+        const existingRows = await db.execute(sql`SELECT id, name, metadata FROM contacts WHERE email = ${normalizedEmail} LIMIT 1`);
+        const existingContact = (existingRows as unknown as Array<{id: string; name: string; metadata: Record<string, string> | null}>)[0];
 
         if (existingContact) {
-          // Merge metadata
-          const existingMeta = (existingContact.metadata as Record<string, string>) || {};
+          const existingMeta = existingContact.metadata || {};
           const merged = { ...existingMeta, ...allData };
           await db.execute(sql`
             UPDATE contacts SET
