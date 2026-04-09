@@ -10,7 +10,6 @@ interface ImportPayload {
   emailColumn: number;
 }
 
-// Smart field detection from header names
 function detectField(header: string): string | null {
   const h = header.toLowerCase().replace(/[^a-z0-9]/g, "");
   if (h.includes("firstname") || h === "first") return "first_name";
@@ -27,8 +26,6 @@ function detectField(header: string): string | null {
 export async function POST(request: NextRequest) {
   try {
     await ensureTables();
-
-    // Add metadata column if it doesn't exist yet
     await db.execute(sql`ALTER TABLE contacts ADD COLUMN IF NOT EXISTS metadata JSONB DEFAULT '{}'`);
 
     const body = (await request.json()) as ImportPayload;
@@ -37,7 +34,6 @@ export async function POST(request: NextRequest) {
     if (!rows || rows.length === 0) {
       return NextResponse.json({ success: false, message: "No rows to import." });
     }
-
     if (emailColumn < 0 || emailColumn >= headers.length) {
       return NextResponse.json({ success: false, message: "Invalid email column." });
     }
@@ -52,12 +48,12 @@ export async function POST(request: NextRequest) {
       try {
         const email = row[emailColumn]?.trim().toLowerCase();
         if (!email || !email.includes("@")) {
-          errors.push(`Row ${i + 2}: Invalid or missing email "${row[emailColumn]}"`);
+          errors.push(`Row ${i + 2}: Invalid email`);
           continue;
         }
 
-        // Build metadata from ALL columns using original header names
-        const metadata: Record<string, string> = {};
+        // Collect ALL data from every column
+        const allData: Record<string, string> = {};
         let detectedName = "";
         let detectedFirstName = "";
         let detectedLastName = "";
@@ -72,10 +68,8 @@ export async function POST(request: NextRequest) {
           const value = row[c]?.trim() || "";
           if (!value) continue;
 
-          // Store EVERYTHING in metadata with original header name
-          metadata[headers[c]!] = value;
+          allData[headers[c]!] = value;
 
-          // Also detect known fields for structured storage
           const field = detectField(headers[c]!);
           switch (field) {
             case "full_name": detectedName = value; break;
@@ -84,7 +78,9 @@ export async function POST(request: NextRequest) {
             case "title": detectedTitle = value; break;
             case "phone": detectedPhone = value; break;
             case "company_name": detectedCompany = value; break;
-            case "domain": detectedDomain = value.toLowerCase().replace(/^https?:\/\//, "").replace(/^www\./, "").split("/")[0] || ""; break;
+            case "domain":
+              detectedDomain = value.toLowerCase().replace(/^https?:\/\//, "").replace(/^www\./, "").split("/")[0] || "";
+              break;
             case "renewal_month": {
               const num = parseInt(value);
               if (num >= 1 && num <= 12) detectedRenewal = num;
@@ -93,14 +89,12 @@ export async function POST(request: NextRequest) {
           }
         }
 
-        // Resolve name
         let name = detectedName;
         if (!name && (detectedFirstName || detectedLastName)) {
           name = `${detectedFirstName} ${detectedLastName}`.trim();
         }
         if (!name) name = extractNameFromEmail(email);
 
-        // Resolve domain
         let domain = detectedDomain || email.split("@")[1] || "unknown.com";
         if (isPersonalDomain(domain)) {
           domain = email.split("@")[1] || "unknown.com";
@@ -109,11 +103,7 @@ export async function POST(request: NextRequest) {
         // Get or create company
         let companyId = companyCache.get(domain);
         if (!companyId) {
-          const [existing] = await db
-            .select()
-            .from(companies)
-            .where(eq(companies.domain, domain))
-            .limit(1);
+          const [existing] = await db.select().from(companies).where(eq(companies.domain, domain)).limit(1);
 
           if (existing) {
             companyId = existing.id;
@@ -124,54 +114,59 @@ export async function POST(request: NextRequest) {
               await db.update(companies).set({ renewalMonth: detectedRenewal, updatedAt: new Date() }).where(eq(companies.id, existing.id));
             }
           } else {
-            const [created] = await db
-              .insert(companies)
-              .values({
-                domain,
-                companyName: detectedCompany || null,
-                status: "prospect",
-                interestStatus: "unknown",
-                renewalMonth: detectedRenewal,
-              })
-              .returning();
+            const [created] = await db.insert(companies).values({
+              domain,
+              companyName: detectedCompany || null,
+              status: "prospect",
+              interestStatus: "unknown",
+              renewalMonth: detectedRenewal,
+            }).returning();
             companyId = created!.id;
             createdCompanies++;
           }
           companyCache.set(domain, companyId);
         }
 
-        // Check for existing contact
-        const [existing] = await db
-          .select()
-          .from(contacts)
-          .where(eq(contacts.email, normalizeEmail(email)))
-          .limit(1);
+        // Use raw SQL for contact insert/update to avoid ORM column conflicts
+        const normalizedEmail = normalizeEmail(email);
+        const metadataJson = JSON.stringify(allData);
 
-        if (existing) {
+        const [existingContact] = await db.select().from(contacts).where(eq(contacts.email, normalizedEmail)).limit(1);
+
+        if (existingContact) {
           // Merge metadata
-          const existingMeta = (existing.metadata as Record<string, string>) || {};
-          const mergedMeta = { ...existingMeta, ...metadata };
-          const updates: Record<string, unknown> = { metadata: mergedMeta, updatedAt: new Date() };
-          if (detectedTitle && !existing.title) updates.title = detectedTitle;
-          if (detectedPhone && !existing.phone) updates.phone = detectedPhone;
-          if (name && existing.name === extractNameFromEmail(email)) updates.name = name;
-          await db.update(contacts).set(updates).where(eq(contacts.id, existing.id));
+          const existingMeta = (existingContact.metadata as Record<string, string>) || {};
+          const merged = { ...existingMeta, ...allData };
+          await db.execute(sql`
+            UPDATE contacts SET
+              metadata = ${JSON.stringify(merged)}::jsonb,
+              title = COALESCE(NULLIF(${detectedTitle}, ''), title),
+              phone = COALESCE(NULLIF(${detectedPhone}, ''), phone),
+              name = CASE WHEN name = ${extractNameFromEmail(email)} AND ${name} != '' THEN ${name} ELSE name END,
+              updated_at = now()
+            WHERE id = ${existingContact.id}::uuid
+          `);
           importedContacts++;
         } else {
-          await db.insert(contacts).values({
-            companyId,
-            email: normalizeEmail(email),
-            name,
-            title: detectedTitle || null,
-            phone: detectedPhone || null,
-            status: "active",
-            metadata,
-          });
+          await db.execute(sql`
+            INSERT INTO contacts (company_id, email, name, title, phone, status, metadata, created_at, updated_at)
+            VALUES (
+              ${companyId}::uuid,
+              ${normalizedEmail},
+              ${name},
+              ${detectedTitle || null},
+              ${detectedPhone || null},
+              'active',
+              ${metadataJson}::jsonb,
+              now(),
+              now()
+            )
+          `);
           importedContacts++;
         }
       } catch (err) {
         const msg = err instanceof Error ? err.message : String(err);
-        errors.push(`Row ${i + 2}: ${msg.slice(0, 100)}`);
+        errors.push(`Row ${i + 2}: ${msg.slice(0, 80)}`);
       }
     }
 
@@ -183,7 +178,6 @@ export async function POST(request: NextRequest) {
       totalRows: rows.length,
       skipped: rows.length - importedContacts,
       errors: errors.slice(0, 50),
-      fieldsStored: headers,
     });
   } catch (err) {
     return NextResponse.json({
