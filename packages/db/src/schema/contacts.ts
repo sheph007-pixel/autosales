@@ -1,4 +1,4 @@
-import { pgTable, uuid, varchar, boolean, timestamp, index } from "drizzle-orm/pg-core";
+import { pgTable, uuid, varchar, boolean, timestamp, jsonb, index } from "drizzle-orm/pg-core";
 import { companies } from "./companies";
 
 export const contacts = pgTable(
@@ -14,6 +14,7 @@ export const contacts = pgTable(
     lastContactedAt: timestamp("last_contacted_at", { withTimezone: true }),
     lastRepliedAt: timestamp("last_replied_at", { withTimezone: true }),
     doNotContact: boolean("do_not_contact").notNull().default(false),
+    metadata: jsonb("metadata").$type<Record<string, string>>().default({}),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
     updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
   },

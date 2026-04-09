@@ -8,22 +8,6 @@ interface ParsedCSV {
   totalRows: number;
 }
 
-const TARGET_FIELDS = [
-  { key: "skip", label: "-- Skip --" },
-  { key: "email", label: "Email *" },
-  { key: "name", label: "Full Name" },
-  { key: "first_name", label: "First Name" },
-  { key: "last_name", label: "Last Name" },
-  { key: "title", label: "Job Title" },
-  { key: "phone", label: "Phone" },
-  { key: "company_name", label: "Company Name" },
-  { key: "domain", label: "Domain" },
-  { key: "renewal_month", label: "Renewal Month (1-12)" },
-  { key: "status", label: "Status" },
-  { key: "interest_status", label: "Interest Status" },
-  { key: "has_plan", label: "Has Group Health Plan" },
-];
-
 function parseCSV(text: string): ParsedCSV {
   const lines = text.split(/\r?\n/).filter((line) => line.trim());
   if (lines.length === 0) return { headers: [], rows: [], totalRows: 0 };
@@ -59,33 +43,26 @@ function parseCSVLine(line: string): string[] {
   return result;
 }
 
-function autoMapFields(headers: string[]): Record<number, string> {
-  const mapping: Record<number, string> = {};
-  const lowerHeaders = headers.map((h) => h.toLowerCase().replace(/[^a-z0-9]/g, ""));
-
-  for (let i = 0; i < lowerHeaders.length; i++) {
-    const h = lowerHeaders[i]!;
-    if (h.includes("email") || h === "emailaddress") mapping[i] = "email";
-    else if (h === "name" || h === "fullname" || h === "contactname") mapping[i] = "name";
-    else if (h === "firstname" || h === "first") mapping[i] = "first_name";
-    else if (h === "lastname" || h === "last") mapping[i] = "last_name";
-    else if (h.includes("title") || h.includes("jobtitle") || h === "position" || h === "role") mapping[i] = "title";
-    else if (h.includes("phone") || h.includes("mobile") || h.includes("cell")) mapping[i] = "phone";
-    else if (h === "company" || h === "companyname" || h === "organization" || h === "org") mapping[i] = "company_name";
-    else if (h === "domain" || h === "website") mapping[i] = "domain";
-    else if (h.includes("renewal")) mapping[i] = "renewal_month";
-    else if (h === "status") mapping[i] = "status";
-    else mapping[i] = "skip";
+function detectEmailColumn(headers: string[]): number {
+  for (let i = 0; i < headers.length; i++) {
+    const h = headers[i]!.toLowerCase().replace(/[^a-z0-9]/g, "");
+    if (h.includes("email") || h === "emailaddress" || h === "e_mail") return i;
   }
-  return mapping;
+  // Fall back: find first column that looks like emails in the data
+  return -1;
 }
 
 export function ImportUploader() {
   const [csv, setCsv] = useState<ParsedCSV | null>(null);
-  const [mapping, setMapping] = useState<Record<number, string>>({});
+  const [emailCol, setEmailCol] = useState<number>(-1);
   const [importing, setImporting] = useState(false);
-  const [result, setResult] = useState<{ success: boolean; message: string; imported?: number; companies?: number; errors?: string[] } | null>(null);
-  const fileRef = useRef<HTMLInputElement>(null);
+  const [result, setResult] = useState<{
+    success: boolean;
+    message: string;
+    imported?: number;
+    companies?: number;
+    errors?: string[];
+  } | null>(null);
 
   function handleFileChange(e: React.ChangeEvent<HTMLInputElement>) {
     const file = e.target.files?.[0];
@@ -96,24 +73,14 @@ export function ImportUploader() {
       const text = event.target?.result as string;
       const parsed = parseCSV(text);
       setCsv(parsed);
-      setMapping(autoMapFields(parsed.headers));
+      setEmailCol(detectEmailColumn(parsed.headers));
       setResult(null);
     };
     reader.readAsText(file);
   }
 
-  function updateMapping(colIndex: number, field: string) {
-    setMapping((prev) => ({ ...prev, [colIndex]: field }));
-  }
-
   async function handleImport() {
-    if (!csv) return;
-
-    const emailCol = Object.entries(mapping).find(([, v]) => v === "email");
-    if (!emailCol) {
-      setResult({ success: false, message: "You must map at least the Email field." });
-      return;
-    }
+    if (!csv || emailCol < 0) return;
 
     setImporting(true);
     setResult(null);
@@ -125,12 +92,12 @@ export function ImportUploader() {
         body: JSON.stringify({
           headers: csv.headers,
           rows: csv.rows,
-          mapping,
+          emailColumn: emailCol,
         }),
       });
       const data = await res.json();
       setResult(data);
-    } catch (err) {
+    } catch {
       setResult({ success: false, message: "Network error during import." });
     } finally {
       setImporting(false);
@@ -143,7 +110,6 @@ export function ImportUploader() {
       <div className="bg-card border rounded-lg p-6">
         <h2 className="font-semibold mb-3">1. Upload CSV</h2>
         <input
-          ref={fileRef}
           type="file"
           accept=".csv"
           onChange={handleFileChange}
@@ -156,42 +122,35 @@ export function ImportUploader() {
         )}
       </div>
 
-      {/* Field Mapping */}
+      {/* Email Column Selection */}
       {csv && (
         <div className="bg-card border rounded-lg p-6">
-          <h2 className="font-semibold mb-3">2. Map Fields</h2>
-          <p className="text-sm text-muted-foreground mb-4">
-            Match each CSV column to a field. Email is required. Contacts will be grouped by domain automatically.
+          <h2 className="font-semibold mb-3">2. Confirm Email Column</h2>
+          <p className="text-sm text-muted-foreground mb-3">
+            Which column contains email addresses? All other columns will be imported as-is using their header names.
           </p>
-          <div className="space-y-2">
-            {csv.headers.map((header, i) => (
-              <div key={i} className="flex items-center gap-4">
-                <div className="w-48 text-sm font-medium truncate" title={header}>
-                  {header}
-                </div>
-                <span className="text-muted-foreground text-xs">→</span>
-                <select
-                  value={mapping[i] || "skip"}
-                  onChange={(e) => updateMapping(i, e.target.value)}
-                  className="flex-1 px-3 py-1.5 border rounded text-sm bg-background"
-                >
-                  {TARGET_FIELDS.map((f) => (
-                    <option key={f.key} value={f.key}>
-                      {f.label}
-                    </option>
-                  ))}
-                </select>
-                <span className="text-xs text-muted-foreground w-32 truncate" title={csv.rows[0]?.[i]}>
-                  e.g. {csv.rows[0]?.[i] || "—"}
-                </span>
-              </div>
+          <select
+            value={emailCol}
+            onChange={(e) => setEmailCol(parseInt(e.target.value))}
+            className="px-3 py-2 border rounded text-sm bg-background w-full max-w-md"
+          >
+            <option value={-1}>-- Select email column --</option>
+            {csv.headers.map((h, i) => (
+              <option key={i} value={i}>
+                {h} (e.g. {csv.rows[0]?.[i] || "—"})
+              </option>
             ))}
-          </div>
+          </select>
+          {emailCol >= 0 && (
+            <p className="text-sm text-green-700 mt-2">
+              Using &quot;{csv.headers[emailCol]}&quot; as email. All {csv.headers.length - 1} other columns will be stored with their original header names.
+            </p>
+          )}
         </div>
       )}
 
       {/* Preview */}
-      {csv && (
+      {csv && emailCol >= 0 && (
         <div className="bg-card border rounded-lg p-6">
           <h2 className="font-semibold mb-3">3. Preview (first 5 rows)</h2>
           <div className="overflow-x-auto">
@@ -199,11 +158,12 @@ export function ImportUploader() {
               <thead>
                 <tr className="bg-muted">
                   {csv.headers.map((h, i) => (
-                    <th key={i} className="p-2 text-left font-medium">
-                      <div>{h}</div>
-                      <div className="text-[10px] text-primary font-normal">
-                        → {TARGET_FIELDS.find((f) => f.key === mapping[i])?.label || "Skip"}
-                      </div>
+                    <th
+                      key={i}
+                      className={`p-2 text-left font-medium ${i === emailCol ? "bg-primary/10 text-primary" : ""}`}
+                    >
+                      {h}
+                      {i === emailCol && <span className="ml-1 text-[10px]">(EMAIL)</span>}
                     </th>
                   ))}
                 </tr>
@@ -212,7 +172,11 @@ export function ImportUploader() {
                 {csv.rows.slice(0, 5).map((row, ri) => (
                   <tr key={ri} className="border-t">
                     {row.map((cell, ci) => (
-                      <td key={ci} className="p-2 truncate max-w-[150px]" title={cell}>
+                      <td
+                        key={ci}
+                        className={`p-2 truncate max-w-[150px] ${ci === emailCol ? "font-medium" : ""}`}
+                        title={cell}
+                      >
                         {cell}
                       </td>
                     ))}
@@ -224,8 +188,8 @@ export function ImportUploader() {
         </div>
       )}
 
-      {/* Import Button */}
-      {csv && (
+      {/* Import */}
+      {csv && emailCol >= 0 && (
         <div className="flex items-center gap-4">
           <button
             onClick={handleImport}
@@ -236,16 +200,15 @@ export function ImportUploader() {
           </button>
           {result && (
             <div className={`text-sm ${result.success ? "text-green-700" : "text-red-700"}`}>
-              {result.message}
+              <p className="font-medium">{result.message}</p>
               {result.imported !== undefined && (
-                <span> ({result.imported} contacts, {result.companies} companies)</span>
+                <p>{result.imported} contacts imported into {result.companies} companies</p>
               )}
               {result.errors && result.errors.length > 0 && (
-                <div className="mt-1 text-xs">
-                  {result.errors.slice(0, 5).map((e, i) => (
+                <div className="mt-1 text-xs max-h-32 overflow-y-auto">
+                  {result.errors.map((e, i) => (
                     <div key={i}>{e}</div>
                   ))}
-                  {result.errors.length > 5 && <div>...and {result.errors.length - 5} more</div>}
                 </div>
               )}
             </div>

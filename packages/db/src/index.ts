@@ -45,9 +45,11 @@ CREATE TABLE IF NOT EXISTS contacts (
   last_contacted_at TIMESTAMPTZ,
   last_replied_at TIMESTAMPTZ,
   do_not_contact BOOLEAN NOT NULL DEFAULT false,
+  metadata JSONB DEFAULT '{}',
   created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
   updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
+ALTER TABLE contacts ADD COLUMN IF NOT EXISTS metadata JSONB DEFAULT '{}';
 CREATE TABLE IF NOT EXISTS email_threads (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   company_id UUID NOT NULL REFERENCES companies(id) ON DELETE CASCADE,
