@@ -54,6 +54,10 @@ export default async function LoginPage({
         <p className="text-xs text-muted-foreground mt-6">
           Signs you in and connects your Outlook mailbox in one step.
         </p>
+
+        <p className="text-[10px] text-muted-foreground/50 mt-4">
+          v{process.env.BUILD_VERSION} &middot; {process.env.BUILD_TIME ? new Date(process.env.BUILD_TIME).toLocaleString() : ""}
+        </p>
       </div>
     </div>
   );

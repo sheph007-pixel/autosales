@@ -50,7 +50,7 @@ export function Nav() {
         ))}
       </nav>
 
-      <div className="p-4 border-t">
+      <div className="p-4 border-t space-y-2">
         <button
           onClick={async () => {
             await fetch("/api/auth/logout", { method: "POST" });
@@ -60,6 +60,9 @@ export function Nav() {
         >
           Sign Out
         </button>
+        <p className="text-[10px] text-muted-foreground/40">
+          v{process.env.NEXT_PUBLIC_BUILD_VERSION} &middot; {process.env.NEXT_PUBLIC_BUILD_TIME}
+        </p>
       </div>
     </aside>
   );
