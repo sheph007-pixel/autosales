@@ -2,7 +2,7 @@ import { cookies } from "next/headers";
 import { SignJWT, jwtVerify } from "jose";
 
 const JWT_SECRET = new TextEncoder().encode(
-  process.env.NEXTAUTH_SECRET || "dev-secret-change-me"
+  process.env.SESSION_SECRET || process.env.NEXTAUTH_SECRET || "dev-secret-change-me"
 );
 
 const COOKIE_NAME = "autosales_session";

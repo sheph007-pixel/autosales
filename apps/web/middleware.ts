@@ -3,7 +3,7 @@ import type { NextRequest } from "next/server";
 import { jwtVerify } from "jose";
 
 const JWT_SECRET = new TextEncoder().encode(
-  process.env.NEXTAUTH_SECRET || "dev-secret-change-me"
+  process.env.SESSION_SECRET || process.env.NEXTAUTH_SECRET || "dev-secret-change-me"
 );
 
 const PUBLIC_PATHS = ["/login", "/api/auth", "/api/health", "/api/webhooks"];
