@@ -22,7 +22,8 @@ function detectField(header: string): string | null {
   return null;
 }
 
-async function ensureColumns() {
+async function ensureSchema() {
+  // Add missing columns
   const alters = [
     `ALTER TABLE contacts ADD COLUMN IF NOT EXISTS metadata JSONB DEFAULT '{}'`,
     `ALTER TABLE contacts ADD COLUMN IF NOT EXISTS status VARCHAR(50) DEFAULT 'active'`,
@@ -32,6 +33,7 @@ async function ensureColumns() {
     `ALTER TABLE contacts ADD COLUMN IF NOT EXISTS last_contacted_at TIMESTAMPTZ`,
     `ALTER TABLE contacts ADD COLUMN IF NOT EXISTS last_replied_at TIMESTAMPTZ`,
     `ALTER TABLE companies ADD COLUMN IF NOT EXISTS status VARCHAR(50) DEFAULT 'prospect'`,
+    `ALTER TABLE companies ADD COLUMN IF NOT EXISTS company_name VARCHAR(255)`,
     `ALTER TABLE companies ADD COLUMN IF NOT EXISTS renewal_month INTEGER`,
     `ALTER TABLE companies ADD COLUMN IF NOT EXISTS has_group_health_plan BOOLEAN`,
     `ALTER TABLE companies ADD COLUMN IF NOT EXISTS interest_status VARCHAR(50) DEFAULT 'unknown'`,
@@ -43,36 +45,53 @@ async function ensureColumns() {
   for (const a of alters) {
     try { await db.execute(sql.raw(a)); } catch {}
   }
+
+  // Add unique constraints if missing
+  try { await db.execute(sql.raw(`CREATE UNIQUE INDEX IF NOT EXISTS contacts_email_unique ON contacts (email)`)); } catch {}
+  try { await db.execute(sql.raw(`CREATE UNIQUE INDEX IF NOT EXISTS companies_domain_unique ON companies (domain)`)); } catch {}
 }
 
 async function getOrCreateCompany(domain: string, companyName: string | null, cache: Map<string, string>): Promise<string> {
   const cached = cache.get(domain);
   if (cached) return cached;
 
-  // Try to find existing
+  // Check if exists
   const found = await db.execute(sql`SELECT id FROM companies WHERE domain = ${domain} LIMIT 1`);
   const rows = found as unknown as Array<Record<string, unknown>>;
 
-  if (rows.length > 0 && rows[0]?.id) {
+  if (rows && rows.length > 0 && rows[0]?.id) {
     const id = String(rows[0].id);
     if (companyName) {
-      try { await db.execute(sql`UPDATE companies SET company_name = COALESCE(company_name, ${companyName}), updated_at = now() WHERE id = ${id}::uuid`); } catch {}
+      try { await db.execute(sql`UPDATE companies SET company_name = COALESCE(company_name, ${companyName}), updated_at = now() WHERE domain = ${domain}`); } catch {}
     }
     cache.set(domain, id);
     return id;
   }
 
-  // Create new
+  // Insert new
   const result = await db.execute(sql`
     INSERT INTO companies (domain, company_name, created_at, updated_at)
     VALUES (${domain}, ${companyName}, now(), now())
-    ON CONFLICT (domain) DO UPDATE SET company_name = COALESCE(companies.company_name, EXCLUDED.company_name)
     RETURNING id
   `);
   const resultRows = result as unknown as Array<Record<string, unknown>>;
-  const id = String(resultRows[0]?.id ?? "");
+  let id: string | null = null;
 
-  if (!id) throw new Error(`Failed to create company for domain ${domain}`);
+  // Handle both array and RowList formats
+  if (Array.isArray(resultRows) && resultRows.length > 0) {
+    id = String(resultRows[0]?.id ?? "");
+  }
+
+  // If still no id, query it back
+  if (!id) {
+    const refetch = await db.execute(sql`SELECT id FROM companies WHERE domain = ${domain} LIMIT 1`);
+    const refetchRows = refetch as unknown as Array<Record<string, unknown>>;
+    if (refetchRows.length > 0) {
+      id = String(refetchRows[0]?.id ?? "");
+    }
+  }
+
+  if (!id) throw new Error(`Could not create company for ${domain}`);
 
   cache.set(domain, id);
   return id;
@@ -81,7 +100,7 @@ async function getOrCreateCompany(domain: string, companyName: string | null, ca
 export async function POST(request: NextRequest) {
   try {
     await ensureTables();
-    await ensureColumns();
+    await ensureSchema();
 
     const body = (await request.json()) as ImportPayload;
     const { headers, rows, emailColumn } = body;
@@ -93,7 +112,6 @@ export async function POST(request: NextRequest) {
     let companiesCreated = 0;
     const errors: string[] = [];
     const companyCache = new Map<string, string>();
-    const initialCompanyCount = companyCache.size;
 
     for (let i = 0; i < rows.length; i++) {
       const row = rows[i]!;
@@ -129,23 +147,33 @@ export async function POST(request: NextRequest) {
         let domain = domainVal || email.split("@")[1] || "unknown.com";
         if (isPersonalDomain(domain)) domain = email.split("@")[1] || "unknown.com";
 
-        const cacheSize = companyCache.size;
+        const prevSize = companyCache.size;
         const companyId = await getOrCreateCompany(domain, companyName || null, companyCache);
-        if (companyCache.size > cacheSize) companiesCreated++;
+        if (companyCache.size > prevSize) companiesCreated++;
 
         const metaJson = JSON.stringify(allData);
 
-        // Upsert contact
-        await db.execute(sql`
-          INSERT INTO contacts (company_id, email, name, title, phone, metadata, created_at, updated_at)
-          VALUES (${companyId}::uuid, ${email}, ${name}, ${title || null}, ${phone || null}, ${metaJson}::jsonb, now(), now())
-          ON CONFLICT (email) DO UPDATE SET
-            metadata = COALESCE(contacts.metadata, '{}'::jsonb) || ${metaJson}::jsonb,
-            title = COALESCE(NULLIF(EXCLUDED.title, ''), contacts.title),
-            phone = COALESCE(NULLIF(EXCLUDED.phone, ''), contacts.phone),
-            name = CASE WHEN length(EXCLUDED.name) > length(contacts.name) THEN EXCLUDED.name ELSE contacts.name END,
-            updated_at = now()
-        `);
+        // Check if contact exists
+        const existingContact = await db.execute(sql`SELECT id FROM contacts WHERE email = ${email} LIMIT 1`);
+        const existingRows = existingContact as unknown as Array<Record<string, unknown>>;
+
+        if (existingRows.length > 0 && existingRows[0]?.id) {
+          // Update existing
+          await db.execute(sql`
+            UPDATE contacts SET
+              metadata = COALESCE(metadata, '{}'::jsonb) || ${metaJson}::jsonb,
+              title = COALESCE(NULLIF(${title}, ''), title),
+              phone = COALESCE(NULLIF(${phone}, ''), phone),
+              updated_at = now()
+            WHERE email = ${email}
+          `);
+        } else {
+          // Insert new
+          await db.execute(sql`
+            INSERT INTO contacts (company_id, email, name, title, phone, metadata, created_at, updated_at)
+            VALUES (${companyId}::uuid, ${email}, ${name}, ${title || null}, ${phone || null}, ${metaJson}::jsonb, now(), now())
+          `);
+        }
         imported++;
       } catch (err) {
         errors.push(`Row ${i + 2}: ${(err instanceof Error ? err.message : String(err)).slice(0, 80)}`);
