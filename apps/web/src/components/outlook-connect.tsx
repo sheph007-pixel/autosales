@@ -12,14 +12,20 @@ export function OutlookConnect({
   lastSynced: string | null;
 }) {
   const [syncing, setSyncing] = useState(false);
+  const [syncResult, setSyncResult] = useState<string | null>(null);
 
   async function handleSync() {
     setSyncing(true);
+    setSyncResult(null);
     try {
       const res = await fetch("/api/sync/trigger", { method: "POST" });
-      if (!res.ok) {
-        alert("Sync failed. Check console for details.");
+      if (res.ok) {
+        setSyncResult("Sync triggered. The worker will process it shortly.");
+      } else {
+        setSyncResult("Sync trigger failed. Check logs.");
       }
+    } catch {
+      setSyncResult("Network error.");
     } finally {
       setSyncing(false);
     }
@@ -29,13 +35,13 @@ export function OutlookConnect({
     return (
       <div>
         <p className="text-sm text-muted-foreground mb-4">
-          Connect your Outlook account to sync emails, discover domains, and enable automated outreach.
+          Outlook mailbox is not connected yet. Sign out and sign back in to connect your mailbox.
         </p>
         <a
-          href="/api/outlook/connect"
+          href="/api/auth/login"
           className="inline-block py-2 px-4 bg-primary text-primary-foreground rounded text-sm font-medium hover:opacity-90"
         >
-          Connect Outlook
+          Reconnect Microsoft Account
         </a>
       </div>
     );
@@ -48,24 +54,19 @@ export function OutlookConnect({
         <span className="text-sm font-medium">Connected</span>
       </div>
       <div className="text-sm text-muted-foreground">
-        <p>Account: {email}</p>
+        <p>Mailbox: {email}</p>
         <p>Last synced: {lastSynced ? new Date(lastSynced).toLocaleString() : "Never"}</p>
       </div>
-      <div className="flex gap-2">
-        <button
-          onClick={handleSync}
-          disabled={syncing}
-          className="py-2 px-4 bg-primary text-primary-foreground rounded text-sm font-medium hover:opacity-90 disabled:opacity-50"
-        >
-          {syncing ? "Syncing..." : "Sync Now"}
-        </button>
-        <a
-          href="/api/outlook/connect"
-          className="py-2 px-4 border rounded text-sm font-medium hover:bg-muted"
-        >
-          Reconnect
-        </a>
-      </div>
+      <button
+        onClick={handleSync}
+        disabled={syncing}
+        className="py-2 px-4 bg-primary text-primary-foreground rounded text-sm font-medium hover:opacity-90 disabled:opacity-50"
+      >
+        {syncing ? "Syncing..." : "Sync Now"}
+      </button>
+      {syncResult && (
+        <p className="text-xs text-muted-foreground">{syncResult}</p>
+      )}
     </div>
   );
 }

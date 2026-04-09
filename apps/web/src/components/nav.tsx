@@ -3,7 +3,6 @@
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { cn } from "@/components/ui/utils";
-import { signOut } from "next-auth/react";
 
 const navItems = [
   { href: "/", label: "Dashboard", icon: "grid" },
@@ -52,12 +51,12 @@ export function Nav() {
       </nav>
 
       <div className="p-4 border-t">
-        <button
-          onClick={() => signOut({ callbackUrl: "/login" })}
-          className="w-full text-sm text-muted-foreground hover:text-foreground transition-colors text-left"
+        <a
+          href="/api/auth/logout"
+          className="w-full text-sm text-muted-foreground hover:text-foreground transition-colors block"
         >
           Sign Out
-        </button>
+        </a>
       </div>
     </aside>
   );

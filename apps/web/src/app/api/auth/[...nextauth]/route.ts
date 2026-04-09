@@ -1,5 +1,10 @@
-import NextAuth from "next-auth";
-import { authOptions } from "@/lib/auth";
+import { NextResponse } from "next/server";
 
-const handler = NextAuth(authOptions);
-export { handler as GET, handler as POST };
+// NextAuth is no longer used. Redirect any legacy NextAuth calls.
+export async function GET() {
+  return NextResponse.redirect(new URL("/login", process.env.APP_URL || process.env.NEXTAUTH_URL || "http://localhost:3000"));
+}
+
+export async function POST() {
+  return NextResponse.json({ error: "NextAuth is no longer used. Use /api/auth/login." }, { status: 410 });
+}

@@ -1,14 +1,7 @@
 import { NextResponse } from "next/server";
-import { getAuthorizationUrl } from "@autosales/mail";
 
+// Outlook is now connected via the unified Microsoft login.
+// Redirect to the main auth flow which handles both.
 export async function GET() {
-  try {
-    const url = getAuthorizationUrl("outlook-connect");
-    return NextResponse.redirect(url);
-  } catch (error) {
-    return NextResponse.json(
-      { error: "Failed to generate authorization URL. Check Microsoft OAuth configuration." },
-      { status: 500 }
-    );
-  }
+  return NextResponse.redirect(new URL("/api/auth/login", process.env.APP_URL || process.env.NEXTAUTH_URL || "http://localhost:3000"));
 }

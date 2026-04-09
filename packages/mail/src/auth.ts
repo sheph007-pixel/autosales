@@ -1,12 +1,17 @@
 import type { GraphTokenResponse } from "./types";
 
 const MICROSOFT_AUTH_URL = "https://login.microsoftonline.com";
+
+// Combined scopes for both authentication AND mail access
 const GRAPH_SCOPES = [
+  "openid",
+  "profile",
+  "email",
+  "User.Read",
   "Mail.Read",
   "Mail.Send",
   "Mail.ReadWrite",
   "offline_access",
-  "User.Read",
 ].join(" ");
 
 function getConfig() {
