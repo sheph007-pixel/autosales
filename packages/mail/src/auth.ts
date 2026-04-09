@@ -36,7 +36,7 @@ export function getAuthorizationUrl(state?: string): string {
     redirect_uri: redirectUri,
     scope: GRAPH_SCOPES,
     response_mode: "query",
-    prompt: "consent",
+    prompt: "select_account",
   });
 
   if (state) params.set("state", state);
