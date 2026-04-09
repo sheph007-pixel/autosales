@@ -7,7 +7,7 @@ import { cn } from "@/components/ui/utils";
 const navItems = [
   { href: "/", label: "Dashboard", icon: "grid" },
   { href: "/domains", label: "Domains", icon: "globe" },
-  { href: "/contacts", label: "Contacts", icon: "users" },
+  { href: "/contacts", label: "Leads", icon: "users" },
   { href: "/inbox", label: "Inbox", icon: "mail" },
   { href: "/cadences", label: "Cadences", icon: "repeat" },
   { href: "/import", label: "Import", icon: "upload" },

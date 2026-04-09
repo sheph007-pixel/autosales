@@ -4,20 +4,18 @@ import Link from "next/link";
 
 export const dynamic = "force-dynamic";
 
-interface ContactRow {
+interface LeadRow {
   id: string;
   name: string;
   email: string;
   title: string | null;
-  phone: string | null;
-  status: string;
   company_name: string | null;
   domain: string;
   company_id: string;
-  last_replied_at: string | null;
+  email_count: number;
 }
 
-export default async function ContactsPage({
+export default async function LeadsPage({
   searchParams,
 }: {
   searchParams: { search?: string; page?: string };
@@ -25,11 +23,11 @@ export default async function ContactsPage({
   const page = Number(searchParams.page) || 1;
   const limit = 50;
   const offset = (page - 1) * limit;
-  let contacts: ContactRow[] = [];
+  let leads: LeadRow[] = [];
   let total = 0;
 
   try {
-    // Auto-fix names from metadata on first load
+    // Auto-fix names from metadata
     await db.execute(sql`
       UPDATE contacts SET
         name = TRIM(COALESCE(metadata->>'first_name', '') || ' ' || COALESCE(metadata->>'last_name', '')),
@@ -40,28 +38,27 @@ export default async function ContactsPage({
         AND (name IS NULL OR name = '' OR name !~ ' ' OR length(name) < 3)
     `).catch(() => {});
 
-    // Query contacts with company info
     const search = searchParams.search;
-    let whereClause = "";
-    if (search) {
-      whereClause = `WHERE c.name ILIKE '%${search.replace(/'/g, "''")}%' OR c.email ILIKE '%${search.replace(/'/g, "''")}%' OR co.company_name ILIKE '%${search.replace(/'/g, "''")}%' OR co.domain ILIKE '%${search.replace(/'/g, "''")}%'`;
-    }
+    const searchFilter = search
+      ? `WHERE c.name ILIKE '%${search.replace(/'/g, "''")}%' OR c.email ILIKE '%${search.replace(/'/g, "''")}%' OR co.company_name ILIKE '%${search.replace(/'/g, "''")}%' OR co.domain ILIKE '%${search.replace(/'/g, "''")}%'`
+      : "";
 
     const countResult = await db.execute(sql.raw(
-      `SELECT count(*) as count FROM contacts c LEFT JOIN companies co ON co.id = c.company_id ${whereClause}`
+      `SELECT count(*) as count FROM contacts c LEFT JOIN companies co ON co.id = c.company_id ${searchFilter}`
     ));
     total = Number((countResult as unknown as Array<{ count: string }>)[0]?.count ?? 0);
 
     const rows = await db.execute(sql.raw(
-      `SELECT c.id, c.name, c.email, c.title, c.phone, c.status, c.company_id, c.last_replied_at,
-              co.company_name, co.domain
+      `SELECT c.id, c.name, c.email, c.title, c.company_id,
+              co.company_name, co.domain,
+              COALESCE((SELECT count(*) FROM email_messages em WHERE em.contact_id = c.id), 0) as email_count
        FROM contacts c
        LEFT JOIN companies co ON co.id = c.company_id
-       ${whereClause}
+       ${searchFilter}
        ORDER BY c.name ASC
        LIMIT ${limit} OFFSET ${offset}`
     ));
-    contacts = rows as unknown as ContactRow[];
+    leads = rows as unknown as LeadRow[];
   } catch {
     // DB not ready
   }
@@ -69,17 +66,20 @@ export default async function ContactsPage({
   return (
     <div>
       <div className="flex items-center justify-between mb-6">
-        <h1 className="text-2xl font-bold">Contacts ({total})</h1>
-        <form className="flex gap-2">
-          <input
-            name="search"
-            type="text"
-            placeholder="Search name, email, company..."
-            defaultValue={searchParams.search || ""}
-            className="px-3 py-1.5 border rounded text-sm bg-background w-64"
-          />
-          <button type="submit" className="px-3 py-1.5 bg-primary text-primary-foreground rounded text-sm">Search</button>
-        </form>
+        <h1 className="text-2xl font-bold">Leads ({total})</h1>
+        <div className="flex gap-2">
+          <form className="flex gap-2">
+            <input
+              name="search"
+              type="text"
+              placeholder="Search name, email, company..."
+              defaultValue={searchParams.search || ""}
+              className="px-3 py-1.5 border rounded text-sm bg-background w-64"
+            />
+            <button type="submit" className="px-3 py-1.5 bg-primary text-primary-foreground rounded text-sm">Search</button>
+          </form>
+          <Link href="/import" className="px-3 py-1.5 border rounded text-sm hover:bg-muted">Import CSV</Link>
+        </div>
       </div>
 
       <div className="bg-card border rounded-lg overflow-hidden">
@@ -87,44 +87,46 @@ export default async function ContactsPage({
           <thead className="bg-muted">
             <tr>
               <th className="text-left p-3 font-medium">Name</th>
-              <th className="text-left p-3 font-medium">Email</th>
               <th className="text-left p-3 font-medium">Company</th>
-              <th className="text-left p-3 font-medium">Domain</th>
-              <th className="text-left p-3 font-medium">Title</th>
-              <th className="text-left p-3 font-medium">Status</th>
-              <th className="text-left p-3 font-medium">Last Replied</th>
+              <th className="text-left p-3 font-medium">Website</th>
+              <th className="text-left p-3 font-medium">Emails</th>
             </tr>
           </thead>
           <tbody>
-            {contacts.length === 0 ? (
+            {leads.length === 0 ? (
               <tr>
-                <td colSpan={7} className="p-8 text-center text-muted-foreground">
-                  No contacts found.
+                <td colSpan={4} className="p-8 text-center text-muted-foreground">
+                  No leads found. <Link href="/import" className="text-primary hover:underline">Import contacts</Link> to get started.
                 </td>
               </tr>
             ) : (
-              contacts.map((contact) => (
-                <tr key={contact.id} className="border-t hover:bg-muted/50">
-                  <td className="p-3 font-medium">{contact.name}</td>
-                  <td className="p-3 text-muted-foreground">{contact.email}</td>
+              leads.map((lead) => (
+                <tr key={lead.id} className="border-t hover:bg-muted/50">
                   <td className="p-3">
-                    <Link href={`/domains/${contact.company_id}`} className="text-primary hover:underline">
-                      {contact.company_name || "—"}
+                    <Link href={`/leads/${lead.id}`} className="font-medium text-primary hover:underline">
+                      {lead.name}
+                    </Link>
+                    {lead.title && (
+                      <p className="text-xs text-muted-foreground">{lead.title}</p>
+                    )}
+                  </td>
+                  <td className="p-3">
+                    <Link href={`/domains/${lead.company_id}`} className="hover:underline">
+                      {lead.company_name || lead.domain}
                     </Link>
                   </td>
-                  <td className="p-3 text-muted-foreground">{contact.domain}</td>
-                  <td className="p-3 text-muted-foreground">{contact.title ?? "—"}</td>
                   <td className="p-3">
-                    <span className={`text-xs px-2 py-0.5 rounded-full ${
-                      contact.status === "active" ? "bg-green-100 text-green-800" :
-                      contact.status === "wrong_person" ? "bg-yellow-100 text-yellow-800" :
-                      "bg-gray-100 text-gray-600"
-                    }`}>
-                      {contact.status}
-                    </span>
+                    <a
+                      href={`https://${lead.domain}`}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="text-primary hover:underline text-xs"
+                    >
+                      {lead.domain}
+                    </a>
                   </td>
-                  <td className="p-3 text-muted-foreground text-xs">
-                    {contact.last_replied_at ? new Date(contact.last_replied_at).toLocaleDateString() : "—"}
+                  <td className="p-3 text-muted-foreground">
+                    {Number(lead.email_count) > 0 ? Number(lead.email_count) : "—"}
                   </td>
                 </tr>
               ))
