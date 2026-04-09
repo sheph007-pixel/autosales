@@ -16,19 +16,34 @@ export async function middleware(request: NextRequest) {
     return NextResponse.next();
   }
 
-  // Check session cookie
+  // Check for our session cookie
   const token = request.cookies.get("autosales_session")?.value;
+
   if (!token) {
-    return NextResponse.redirect(new URL("/login", request.url));
+    // Clear any legacy NextAuth cookies and redirect
+    const response = NextResponse.redirect(new URL("/login", request.url));
+    response.cookies.delete("next-auth.session-token");
+    response.cookies.delete("__Secure-next-auth.session-token");
+    response.cookies.delete("next-auth.csrf-token");
+    response.cookies.delete("next-auth.callback-url");
+    return response;
   }
 
   try {
-    await jwtVerify(token, JWT_SECRET);
+    const { payload } = await jwtVerify(token, JWT_SECRET);
+    // Verify this is our new auth format (has microsoftId claim)
+    if (!payload.microsoftId) {
+      throw new Error("Legacy token format");
+    }
     return NextResponse.next();
   } catch {
-    // Invalid/expired token — clear and redirect
+    // Invalid/expired/legacy token — clear everything and redirect
     const response = NextResponse.redirect(new URL("/login", request.url));
     response.cookies.delete("autosales_session");
+    response.cookies.delete("next-auth.session-token");
+    response.cookies.delete("__Secure-next-auth.session-token");
+    response.cookies.delete("next-auth.csrf-token");
+    response.cookies.delete("next-auth.callback-url");
     return response;
   }
 }
