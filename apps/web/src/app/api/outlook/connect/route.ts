@@ -1,7 +1,7 @@
-import { NextResponse } from "next/server";
+import { NextRequest, NextResponse } from "next/server";
 
 // Outlook is now connected via the unified Microsoft login.
-// Redirect to the main auth flow which handles both.
-export async function GET() {
-  return NextResponse.redirect(new URL("/api/auth/login", process.env.APP_URL || process.env.NEXTAUTH_URL || "http://localhost:3000"));
+export async function GET(request: NextRequest) {
+  const baseUrl = `${request.nextUrl.protocol}//${request.nextUrl.host}`;
+  return NextResponse.redirect(new URL("/api/auth/login", baseUrl));
 }

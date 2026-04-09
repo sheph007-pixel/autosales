@@ -4,21 +4,22 @@ import { db, oauthAccounts } from "@autosales/db";
 import { eq } from "drizzle-orm";
 import { createSessionToken, setSessionCookie, isAllowedEmail } from "@/lib/auth";
 
-function getAppUrl() {
-  return process.env.APP_URL || process.env.NEXTAUTH_URL || "http://localhost:3000";
+function getBaseUrl(request: NextRequest): string {
+  return `${request.nextUrl.protocol}//${request.nextUrl.host}`;
 }
 
 export async function GET(request: NextRequest) {
+  const baseUrl = getBaseUrl(request);
   const code = request.nextUrl.searchParams.get("code");
   const error = request.nextUrl.searchParams.get("error");
 
   if (error) {
     console.error("OAuth error:", error);
-    return NextResponse.redirect(new URL(`/login?error=${error}`, getAppUrl()));
+    return NextResponse.redirect(new URL(`/login?error=${error}`, baseUrl));
   }
 
   if (!code) {
-    return NextResponse.redirect(new URL("/login?error=no_code", getAppUrl()));
+    return NextResponse.redirect(new URL("/login?error=no_code", baseUrl));
   }
 
   try {
@@ -31,13 +32,13 @@ export async function GET(request: NextRequest) {
     const userEmail = (profile.mail || profile.userPrincipalName || "").toLowerCase();
 
     if (!userEmail) {
-      return NextResponse.redirect(new URL("/login?error=no_email", getAppUrl()));
+      return NextResponse.redirect(new URL("/login?error=no_email", baseUrl));
     }
 
     // Check if this email is allowed
     if (!isAllowedEmail(userEmail)) {
       console.warn(`Unauthorized login attempt from: ${userEmail}`);
-      return NextResponse.redirect(new URL("/login?error=unauthorized", getAppUrl()));
+      return NextResponse.redirect(new URL("/login?error=unauthorized", baseUrl));
     }
 
     const tokenExpiresAt = new Date(Date.now() + tokens.expires_in * 1000);
@@ -89,9 +90,9 @@ export async function GET(request: NextRequest) {
 
     // Set session cookie and redirect to dashboard
     await setSessionCookie(sessionToken);
-    return NextResponse.redirect(new URL("/", getAppUrl()));
+    return NextResponse.redirect(new URL("/", baseUrl));
   } catch (err) {
     console.error("Auth callback error:", err);
-    return NextResponse.redirect(new URL("/login?error=auth_failed", getAppUrl()));
+    return NextResponse.redirect(new URL("/login?error=auth_failed", baseUrl));
   }
 }

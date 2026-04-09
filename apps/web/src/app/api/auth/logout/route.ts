@@ -1,10 +1,10 @@
-import { NextResponse } from "next/server";
+import { NextRequest, NextResponse } from "next/server";
 import { clearSessionCookie } from "@/lib/auth";
 
-export async function GET() {
+export async function GET(request: NextRequest) {
   await clearSessionCookie();
-  const appUrl = process.env.APP_URL || process.env.NEXTAUTH_URL || "http://localhost:3000";
-  return NextResponse.redirect(new URL("/login", appUrl));
+  const baseUrl = `${request.nextUrl.protocol}//${request.nextUrl.host}`;
+  return NextResponse.redirect(new URL("/login", baseUrl));
 }
 
 export async function POST() {
