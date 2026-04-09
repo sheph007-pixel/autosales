@@ -8,6 +8,17 @@ const JWT_SECRET = new TextEncoder().encode(
 
 const PUBLIC_PATHS = ["/login", "/api/auth", "/api/health", "/api/webhooks"];
 
+function getPublicUrl(request: NextRequest): string {
+  // Railway sets x-forwarded-host with the public domain
+  const forwardedHost = request.headers.get("x-forwarded-host");
+  const forwardedProto = request.headers.get("x-forwarded-proto") || "https";
+  if (forwardedHost) {
+    return `${forwardedProto}://${forwardedHost}`;
+  }
+  // Fallback to APP_URL or request URL
+  return process.env.APP_URL || request.url;
+}
+
 export async function middleware(request: NextRequest) {
   const { pathname } = request.nextUrl;
 
@@ -16,12 +27,22 @@ export async function middleware(request: NextRequest) {
     return NextResponse.next();
   }
 
-  // Check for our session cookie
-  const token = request.cookies.get("autosales_session")?.value;
+  // Allow static assets
+  if (pathname.startsWith("/_next") || pathname === "/favicon.ico") {
+    return NextResponse.next();
+  }
 
-  if (!token) {
-    // Clear any legacy NextAuth cookies and redirect
-    const response = NextResponse.redirect(new URL("/login", request.url));
+  const publicUrl = getPublicUrl(request);
+
+  // Check ALL possible session cookies
+  const token = request.cookies.get("autosales_session")?.value;
+  const legacyToken1 = request.cookies.get("next-auth.session-token")?.value;
+  const legacyToken2 = request.cookies.get("__Secure-next-auth.session-token")?.value;
+
+  // If ANY legacy cookie exists, clear everything and force login
+  if (legacyToken1 || legacyToken2) {
+    const response = NextResponse.redirect(new URL("/login", publicUrl));
+    response.cookies.delete("autosales_session");
     response.cookies.delete("next-auth.session-token");
     response.cookies.delete("__Secure-next-auth.session-token");
     response.cookies.delete("next-auth.csrf-token");
@@ -29,21 +50,19 @@ export async function middleware(request: NextRequest) {
     return response;
   }
 
+  if (!token) {
+    return NextResponse.redirect(new URL("/login", publicUrl));
+  }
+
   try {
     const { payload } = await jwtVerify(token, JWT_SECRET);
-    // Verify this is our new auth format (has microsoftId claim)
     if (!payload.microsoftId) {
       throw new Error("Legacy token format");
     }
     return NextResponse.next();
   } catch {
-    // Invalid/expired/legacy token — clear everything and redirect
-    const response = NextResponse.redirect(new URL("/login", request.url));
+    const response = NextResponse.redirect(new URL("/login", publicUrl));
     response.cookies.delete("autosales_session");
-    response.cookies.delete("next-auth.session-token");
-    response.cookies.delete("__Secure-next-auth.session-token");
-    response.cookies.delete("next-auth.csrf-token");
-    response.cookies.delete("next-auth.callback-url");
     return response;
   }
 }

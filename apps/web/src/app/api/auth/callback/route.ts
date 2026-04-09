@@ -4,46 +4,44 @@ import { db, oauthAccounts } from "@autosales/db";
 import { eq } from "drizzle-orm";
 import { createSessionToken, setSessionCookie, isAllowedEmail } from "@/lib/auth";
 
-function getBaseUrl(request: NextRequest): string {
-  return `${request.nextUrl.protocol}//${request.nextUrl.host}`;
+function getPublicUrl(request: NextRequest): string {
+  const forwardedHost = request.headers.get("x-forwarded-host");
+  const forwardedProto = request.headers.get("x-forwarded-proto") || "https";
+  if (forwardedHost) return `${forwardedProto}://${forwardedHost}`;
+  return process.env.APP_URL || `${request.nextUrl.protocol}//${request.nextUrl.host}`;
 }
 
 export async function GET(request: NextRequest) {
-  const baseUrl = getBaseUrl(request);
+  const publicUrl = getPublicUrl(request);
   const code = request.nextUrl.searchParams.get("code");
   const error = request.nextUrl.searchParams.get("error");
 
   if (error) {
     console.error("OAuth error:", error);
-    return NextResponse.redirect(new URL(`/login?error=${error}`, baseUrl));
+    return NextResponse.redirect(new URL(`/login?error=${error}`, publicUrl));
   }
 
   if (!code) {
-    return NextResponse.redirect(new URL("/login?error=no_code", baseUrl));
+    return NextResponse.redirect(new URL("/login?error=no_code", publicUrl));
   }
 
   try {
-    // Exchange code for tokens (includes both auth + mail scopes)
     const tokens = await exchangeCodeForTokens(code);
-
-    // Get user profile
     const client = new GraphClient(tokens.access_token);
     const profile = await client.getProfile();
     const userEmail = (profile.mail || profile.userPrincipalName || "").toLowerCase();
 
     if (!userEmail) {
-      return NextResponse.redirect(new URL("/login?error=no_email", baseUrl));
+      return NextResponse.redirect(new URL("/login?error=no_email", publicUrl));
     }
 
-    // Check if this email is allowed
     if (!isAllowedEmail(userEmail)) {
       console.warn(`Unauthorized login attempt from: ${userEmail}`);
-      return NextResponse.redirect(new URL("/login?error=unauthorized", baseUrl));
+      return NextResponse.redirect(new URL("/login?error=unauthorized", publicUrl));
     }
 
     const tokenExpiresAt = new Date(Date.now() + tokens.expires_in * 1000);
 
-    // Upsert oauth account — this serves as both the user record and the mail token store
     const [existing] = await db
       .select()
       .from(oauthAccounts)
@@ -80,7 +78,6 @@ export async function GET(request: NextRequest) {
       accountId = created!.id;
     }
 
-    // Create session JWT
     const sessionToken = await createSessionToken({
       id: accountId,
       email: userEmail,
@@ -88,11 +85,10 @@ export async function GET(request: NextRequest) {
       microsoftId: profile.id,
     });
 
-    // Set session cookie and redirect to dashboard
     await setSessionCookie(sessionToken);
-    return NextResponse.redirect(new URL("/", baseUrl));
+    return NextResponse.redirect(new URL("/", publicUrl));
   } catch (err) {
     console.error("Auth callback error:", err);
-    return NextResponse.redirect(new URL("/login?error=auth_failed", baseUrl));
+    return NextResponse.redirect(new URL("/login?error=auth_failed", publicUrl));
   }
 }
