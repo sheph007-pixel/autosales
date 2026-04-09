@@ -1,6 +1,6 @@
 [build]
 builder = "nixpacks"
-buildCommand = "pnpm install && pnpm turbo build --filter=web..."
+buildCommand = "pnpm install && pnpm turbo build --filter=web... && cd packages/db && pnpm drizzle-kit push"
 
 [deploy]
 startCommand = "cp -r apps/web/.next/static apps/web/.next/standalone/apps/web/.next/static && HOSTNAME=0.0.0.0 node apps/web/.next/standalone/apps/web/server.js"
