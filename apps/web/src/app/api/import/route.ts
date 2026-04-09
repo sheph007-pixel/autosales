@@ -49,6 +49,10 @@ async function ensureSchema() {
   // Add unique constraints if missing
   try { await db.execute(sql.raw(`CREATE UNIQUE INDEX IF NOT EXISTS contacts_email_unique ON contacts (email)`)); } catch {}
   try { await db.execute(sql.raw(`CREATE UNIQUE INDEX IF NOT EXISTS companies_domain_unique ON companies (domain)`)); } catch {}
+
+  // Ensure UUID defaults exist on id columns
+  try { await db.execute(sql.raw(`ALTER TABLE companies ALTER COLUMN id SET DEFAULT gen_random_uuid()`)); } catch {}
+  try { await db.execute(sql.raw(`ALTER TABLE contacts ALTER COLUMN id SET DEFAULT gen_random_uuid()`)); } catch {}
 }
 
 async function getOrCreateCompany(domain: string, companyName: string | null, cache: Map<string, string>): Promise<string> {
@@ -68,10 +72,10 @@ async function getOrCreateCompany(domain: string, companyName: string | null, ca
     return id;
   }
 
-  // Insert new
+  // Insert new — explicitly generate UUID
   const result = await db.execute(sql`
-    INSERT INTO companies (domain, company_name, created_at, updated_at)
-    VALUES (${domain}, ${companyName}, now(), now())
+    INSERT INTO companies (id, domain, company_name, created_at, updated_at)
+    VALUES (gen_random_uuid(), ${domain}, ${companyName}, now(), now())
     RETURNING id
   `);
   const resultRows = result as unknown as Array<Record<string, unknown>>;
@@ -168,10 +172,10 @@ export async function POST(request: NextRequest) {
             WHERE email = ${email}
           `);
         } else {
-          // Insert new
+          // Insert new — explicitly generate UUID
           await db.execute(sql`
-            INSERT INTO contacts (company_id, email, name, title, phone, metadata, created_at, updated_at)
-            VALUES (${companyId}::uuid, ${email}, ${name}, ${title || null}, ${phone || null}, ${metaJson}::jsonb, now(), now())
+            INSERT INTO contacts (id, company_id, email, name, title, phone, metadata, created_at, updated_at)
+            VALUES (gen_random_uuid(), ${companyId}::uuid, ${email}, ${name}, ${title || null}, ${phone || null}, ${metaJson}::jsonb, now(), now())
           `);
         }
         imported++;
