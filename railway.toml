@@ -1,10 +1,10 @@
 [build]
 builder = "nixpacks"
-buildCommand = "pnpm install && cd packages/db && pnpm drizzle-kit push --force && cd ../.. && pnpm turbo build --filter=web..."
+buildCommand = "pnpm install && pnpm turbo build --filter=web..."
 
 [deploy]
-startCommand = "cp -r apps/web/.next/static apps/web/.next/standalone/apps/web/.next/static && HOSTNAME=0.0.0.0 node apps/web/.next/standalone/apps/web/server.js"
+startCommand = "cd packages/db && pnpm drizzle-kit push --force && cd ../.. && cp -r apps/web/.next/static apps/web/.next/standalone/apps/web/.next/static && HOSTNAME=0.0.0.0 node apps/web/.next/standalone/apps/web/server.js"
 healthcheckPath = "/api/health"
-healthcheckTimeout = 60
+healthcheckTimeout = 120
 restartPolicyType = "ON_FAILURE"
 restartPolicyMaxRetries = 5
