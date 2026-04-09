@@ -1,30 +1,25 @@
 import { NextRequest, NextResponse } from "next/server";
-import { clearSessionCookie } from "@/lib/auth";
 
-function getPublicUrl(request: NextRequest): string {
-  const forwardedHost = request.headers.get("x-forwarded-host");
-  const forwardedProto = request.headers.get("x-forwarded-proto") || "https";
-  if (forwardedHost) return `${forwardedProto}://${forwardedHost}`;
-  return process.env.APP_URL || `${request.nextUrl.protocol}//${request.nextUrl.host}`;
+function clearAllCookies(response: NextResponse) {
+  const cookieOptions = { path: "/", expires: new Date(0) };
+  response.cookies.set("autosales_session", "", cookieOptions);
+  response.cookies.set("next-auth.session-token", "", cookieOptions);
+  response.cookies.set("__Secure-next-auth.session-token", "", cookieOptions);
+  response.cookies.set("next-auth.csrf-token", "", cookieOptions);
+  response.cookies.set("next-auth.callback-url", "", cookieOptions);
 }
 
 export async function GET(request: NextRequest) {
-  await clearSessionCookie();
-  const response = NextResponse.redirect(new URL("/login", getPublicUrl(request)));
-  // Clear all possible cookies
-  response.cookies.delete("autosales_session");
-  response.cookies.delete("next-auth.session-token");
-  response.cookies.delete("__Secure-next-auth.session-token");
-  response.cookies.delete("next-auth.csrf-token");
-  response.cookies.delete("next-auth.callback-url");
+  // For direct browser navigation — redirect using APP_URL
+  const appUrl = process.env.APP_URL || "https://crm-production-8b2a.up.railway.app";
+  const response = NextResponse.redirect(new URL("/login", appUrl));
+  clearAllCookies(response);
   return response;
 }
 
-export async function POST(request: NextRequest) {
-  await clearSessionCookie();
+export async function POST() {
+  // For fetch() calls from client — return JSON with cookie clearing
   const response = NextResponse.json({ ok: true });
-  response.cookies.delete("autosales_session");
-  response.cookies.delete("next-auth.session-token");
-  response.cookies.delete("__Secure-next-auth.session-token");
+  clearAllCookies(response);
   return response;
 }

@@ -4,25 +4,31 @@ import { db, oauthAccounts } from "@autosales/db";
 import { eq } from "drizzle-orm";
 import { createSessionToken, setSessionCookie, isAllowedEmail } from "@/lib/auth";
 
-function getPublicUrl(request: NextRequest): string {
-  const forwardedHost = request.headers.get("x-forwarded-host");
-  const forwardedProto = request.headers.get("x-forwarded-proto") || "https";
-  if (forwardedHost) return `${forwardedProto}://${forwardedHost}`;
-  return process.env.APP_URL || `${request.nextUrl.protocol}//${request.nextUrl.host}`;
+function resolveBaseUrl(request: NextRequest): string {
+  const fwdHost = request.headers.get("x-forwarded-host");
+  if (fwdHost) {
+    const proto = request.headers.get("x-forwarded-proto") || "https";
+    return `${proto}://${fwdHost}`;
+  }
+  const host = request.headers.get("host");
+  if (host && !host.startsWith("0.0.0.0") && !host.startsWith("127.0.0.1")) {
+    return `https://${host}`;
+  }
+  return process.env.APP_URL || "https://crm-production-8b2a.up.railway.app";
 }
 
 export async function GET(request: NextRequest) {
-  const publicUrl = getPublicUrl(request);
+  const baseUrl = resolveBaseUrl(request);
   const code = request.nextUrl.searchParams.get("code");
   const error = request.nextUrl.searchParams.get("error");
 
   if (error) {
     console.error("OAuth error:", error);
-    return NextResponse.redirect(new URL(`/login?error=${error}`, publicUrl));
+    return NextResponse.redirect(new URL(`/login?error=${error}`, baseUrl));
   }
 
   if (!code) {
-    return NextResponse.redirect(new URL("/login?error=no_code", publicUrl));
+    return NextResponse.redirect(new URL("/login?error=no_code", baseUrl));
   }
 
   try {
@@ -32,12 +38,12 @@ export async function GET(request: NextRequest) {
     const userEmail = (profile.mail || profile.userPrincipalName || "").toLowerCase();
 
     if (!userEmail) {
-      return NextResponse.redirect(new URL("/login?error=no_email", publicUrl));
+      return NextResponse.redirect(new URL("/login?error=no_email", baseUrl));
     }
 
     if (!isAllowedEmail(userEmail)) {
       console.warn(`Unauthorized login attempt from: ${userEmail}`);
-      return NextResponse.redirect(new URL("/login?error=unauthorized", publicUrl));
+      return NextResponse.redirect(new URL("/login?error=unauthorized", baseUrl));
     }
 
     const tokenExpiresAt = new Date(Date.now() + tokens.expires_in * 1000);
@@ -86,9 +92,9 @@ export async function GET(request: NextRequest) {
     });
 
     await setSessionCookie(sessionToken);
-    return NextResponse.redirect(new URL("/", publicUrl));
+    return NextResponse.redirect(new URL("/", baseUrl));
   } catch (err) {
     console.error("Auth callback error:", err);
-    return NextResponse.redirect(new URL("/login?error=auth_failed", publicUrl));
+    return NextResponse.redirect(new URL("/login?error=auth_failed", baseUrl));
   }
 }

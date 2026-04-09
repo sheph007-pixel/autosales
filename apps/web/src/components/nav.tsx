@@ -51,12 +51,15 @@ export function Nav() {
       </nav>
 
       <div className="p-4 border-t">
-        <a
-          href="/api/auth/logout"
-          className="w-full text-sm text-muted-foreground hover:text-foreground transition-colors block"
+        <button
+          onClick={async () => {
+            await fetch("/api/auth/logout", { method: "POST" });
+            window.location.href = "/login";
+          }}
+          className="w-full text-sm text-muted-foreground hover:text-foreground transition-colors text-left"
         >
           Sign Out
-        </a>
+        </button>
       </div>
     </aside>
   );
