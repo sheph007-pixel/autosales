@@ -22,79 +22,26 @@ function detectField(header: string): string | null {
   return null;
 }
 
-async function ensureSchema() {
-  // Add missing columns
-  const alters = [
-    `ALTER TABLE contacts ADD COLUMN IF NOT EXISTS metadata JSONB DEFAULT '{}'`,
-    `ALTER TABLE contacts ADD COLUMN IF NOT EXISTS status VARCHAR(50) DEFAULT 'active'`,
-    `ALTER TABLE contacts ADD COLUMN IF NOT EXISTS phone VARCHAR(50)`,
-    `ALTER TABLE contacts ADD COLUMN IF NOT EXISTS title VARCHAR(255)`,
-    `ALTER TABLE contacts ADD COLUMN IF NOT EXISTS do_not_contact BOOLEAN DEFAULT false`,
-    `ALTER TABLE contacts ADD COLUMN IF NOT EXISTS last_contacted_at TIMESTAMPTZ`,
-    `ALTER TABLE contacts ADD COLUMN IF NOT EXISTS last_replied_at TIMESTAMPTZ`,
-    `ALTER TABLE companies ADD COLUMN IF NOT EXISTS status VARCHAR(50) DEFAULT 'prospect'`,
-    `ALTER TABLE companies ADD COLUMN IF NOT EXISTS company_name VARCHAR(255)`,
-    `ALTER TABLE companies ADD COLUMN IF NOT EXISTS renewal_month INTEGER`,
-    `ALTER TABLE companies ADD COLUMN IF NOT EXISTS has_group_health_plan BOOLEAN`,
-    `ALTER TABLE companies ADD COLUMN IF NOT EXISTS interest_status VARCHAR(50) DEFAULT 'unknown'`,
-    `ALTER TABLE companies ADD COLUMN IF NOT EXISTS do_not_contact BOOLEAN DEFAULT false`,
-    `ALTER TABLE companies ADD COLUMN IF NOT EXISTS summary TEXT`,
-    `ALTER TABLE companies ADD COLUMN IF NOT EXISTS next_action_at TIMESTAMPTZ`,
-    `ALTER TABLE companies ADD COLUMN IF NOT EXISTS last_activity_at TIMESTAMPTZ`,
-  ];
-  for (const a of alters) {
-    try { await db.execute(sql.raw(a)); } catch {}
-  }
-
-  // Add unique constraints if missing
-  try { await db.execute(sql.raw(`CREATE UNIQUE INDEX IF NOT EXISTS contacts_email_unique ON contacts (email)`)); } catch {}
-  try { await db.execute(sql.raw(`CREATE UNIQUE INDEX IF NOT EXISTS companies_domain_unique ON companies (domain)`)); } catch {}
-
-  // Ensure UUID defaults exist on id columns
-  try { await db.execute(sql.raw(`ALTER TABLE companies ALTER COLUMN id SET DEFAULT gen_random_uuid()`)); } catch {}
-  try { await db.execute(sql.raw(`ALTER TABLE contacts ALTER COLUMN id SET DEFAULT gen_random_uuid()`)); } catch {}
-}
-
 async function getOrCreateCompany(domain: string, companyName: string | null, cache: Map<string, string>): Promise<string> {
   const cached = cache.get(domain);
   if (cached) return cached;
 
-  // Check if exists
   const found = await db.execute(sql`SELECT id FROM companies WHERE domain = ${domain} LIMIT 1`);
   const rows = found as unknown as Array<Record<string, unknown>>;
-
-  if (rows && rows.length > 0 && rows[0]?.id) {
+  if (rows.length > 0 && rows[0]?.id) {
     const id = String(rows[0].id);
-    if (companyName) {
-      try { await db.execute(sql`UPDATE companies SET company_name = COALESCE(company_name, ${companyName}), updated_at = now() WHERE domain = ${domain}`); } catch {}
-    }
     cache.set(domain, id);
     return id;
   }
 
-  // Insert new — explicitly generate UUID
-  const result = await db.execute(sql`
-    INSERT INTO companies (id, domain, company_name, created_at, updated_at)
-    VALUES (gen_random_uuid(), ${domain}, ${companyName}, now(), now())
-    RETURNING id
+  await db.execute(sql`
+    INSERT INTO companies (domain, company_name, created_at, updated_at)
+    VALUES (${domain}, ${companyName}, now(), now())
   `);
-  const resultRows = result as unknown as Array<Record<string, unknown>>;
-  let id: string | null = null;
 
-  // Handle both array and RowList formats
-  if (Array.isArray(resultRows) && resultRows.length > 0) {
-    id = String(resultRows[0]?.id ?? "");
-  }
-
-  // If still no id, query it back
-  if (!id) {
-    const refetch = await db.execute(sql`SELECT id FROM companies WHERE domain = ${domain} LIMIT 1`);
-    const refetchRows = refetch as unknown as Array<Record<string, unknown>>;
-    if (refetchRows.length > 0) {
-      id = String(refetchRows[0]?.id ?? "");
-    }
-  }
-
+  const refetch = await db.execute(sql`SELECT id FROM companies WHERE domain = ${domain} LIMIT 1`);
+  const refetchRows = refetch as unknown as Array<Record<string, unknown>>;
+  const id = String(refetchRows[0]?.id ?? "");
   if (!id) throw new Error(`Could not create company for ${domain}`);
 
   cache.set(domain, id);
@@ -104,7 +51,6 @@ async function getOrCreateCompany(domain: string, companyName: string | null, ca
 export async function POST(request: NextRequest) {
   try {
     await ensureTables();
-    await ensureSchema();
 
     const body = (await request.json()) as ImportPayload;
     const { headers, rows, emailColumn } = body;
@@ -127,7 +73,6 @@ export async function POST(request: NextRequest) {
         }
         const email = normalizeEmail(rawEmail);
 
-        // Gather all data
         const allData: Record<string, string> = {};
         let firstName = "", lastName = "", fullName = "", title = "", phone = "", companyName = "", domainVal = "";
 
@@ -158,11 +103,10 @@ export async function POST(request: NextRequest) {
         const metaJson = JSON.stringify(allData);
 
         // Check if contact exists
-        const existingContact = await db.execute(sql`SELECT id FROM contacts WHERE email = ${email} LIMIT 1`);
-        const existingRows = existingContact as unknown as Array<Record<string, unknown>>;
+        const existing = await db.execute(sql`SELECT id FROM contacts WHERE email = ${email} LIMIT 1`);
+        const existingRows = existing as unknown as Array<Record<string, unknown>>;
 
         if (existingRows.length > 0 && existingRows[0]?.id) {
-          // Update existing
           await db.execute(sql`
             UPDATE contacts SET
               metadata = COALESCE(metadata, '{}'::jsonb) || ${metaJson}::jsonb,
@@ -172,10 +116,9 @@ export async function POST(request: NextRequest) {
             WHERE email = ${email}
           `);
         } else {
-          // Insert new — explicitly generate UUID
           await db.execute(sql`
-            INSERT INTO contacts (id, company_id, email, name, title, phone, metadata, created_at, updated_at)
-            VALUES (gen_random_uuid(), ${companyId}::uuid, ${email}, ${name}, ${title || null}, ${phone || null}, ${metaJson}::jsonb, now(), now())
+            INSERT INTO contacts (company_id, email, name, title, phone, metadata, created_at, updated_at)
+            VALUES (${companyId}::uuid, ${email}, ${name}, ${title || null}, ${phone || null}, ${metaJson}::jsonb, now(), now())
           `);
         }
         imported++;
