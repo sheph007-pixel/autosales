@@ -49,18 +49,29 @@ export default async function GroupDetailPage({ params }: { params: { id: string
   try {
     await ensureTables();
 
-    const groupRows = await db.execute(sql`
-      SELECT id, domain, company_name, status, renewal_month, has_group_health_plan,
-             next_action_at, last_activity_at, do_not_contact, summary, primary_contact_id
-      FROM companies WHERE id = ${params.id}::uuid LIMIT 1
-    `);
-    group = (groupRows as unknown as GroupDetail[])[0] ?? null;
+    try {
+      const groupRows = await db.execute(sql`
+        SELECT id, domain, company_name, status, renewal_month, has_group_health_plan,
+               next_action_at, last_activity_at, do_not_contact, summary, primary_contact_id
+        FROM companies WHERE id = ${params.id}::uuid LIMIT 1
+      `);
+      group = (groupRows as unknown as GroupDetail[])[0] ?? null;
+    } catch {
+      // primary_contact_id column may not exist yet — fall back without it
+      const groupRows = await db.execute(sql`
+        SELECT id, domain, company_name, status, renewal_month, has_group_health_plan,
+               next_action_at, last_activity_at, do_not_contact, summary
+        FROM companies WHERE id = ${params.id}::uuid LIMIT 1
+      `);
+      const row = (groupRows as unknown as Omit<GroupDetail, "primary_contact_id">[])[0];
+      group = row ? { ...row, primary_contact_id: null } : null;
+    }
 
     if (group) {
       const contactRows = await db.execute(sql`
         SELECT id, name, email, title, phone
         FROM contacts WHERE company_id = ${params.id}::uuid
-        ORDER BY (id = ${group.primary_contact_id}::uuid) DESC NULLS LAST, name ASC
+        ORDER BY created_at ASC
       `);
       contacts = contactRows as unknown as ContactRow[];
 

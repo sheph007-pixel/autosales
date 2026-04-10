@@ -28,6 +28,12 @@ const SORTABLE_COLUMNS: Record<string, string> = {
   renewal: "c.renewal_month",
 };
 
+const BASE_FROM = `FROM companies c
+  LEFT JOIN LATERAL (
+    SELECT name, email, id FROM contacts WHERE company_id = c.id
+    ORDER BY created_at ASC LIMIT 1
+  ) pc ON true`;
+
 export default async function GroupsPage({
   searchParams,
 }: {
@@ -68,8 +74,7 @@ export default async function GroupsPage({
 
     const countResult = await db.execute(sql.raw(
       `SELECT count(*) as count
-       FROM companies c
-       LEFT JOIN contacts pc ON pc.id = c.primary_contact_id
+       ${BASE_FROM}
        ${whereClause}`
     ));
     total = Number((countResult as unknown as Array<{ count: string }>)[0]?.count ?? 0);
@@ -86,8 +91,7 @@ export default async function GroupsPage({
          pc.name as primary_contact_name,
          pc.email as primary_contact_email,
          (SELECT count(*) FROM email_messages em WHERE em.company_id = c.id) as email_count
-       FROM companies c
-       LEFT JOIN contacts pc ON pc.id = c.primary_contact_id
+       ${BASE_FROM}
        ${whereClause}
        ORDER BY ${sortCol} ${sortDir} NULLS LAST
        LIMIT ${limit} OFFSET ${offset}`
