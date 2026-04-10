@@ -1,4 +1,4 @@
-import { db, ensureTables } from "@autosales/db";
+import { db, ensureTables, getLastSchemaError } from "@autosales/db";
 import { sql } from "drizzle-orm";
 import Link from "next/link";
 import { COMPANY_STATUSES, STATUS_LABELS, STATUS_COLORS, getMonthName, type CompanyStatus } from "@autosales/core";
@@ -21,18 +21,22 @@ interface GroupRow {
 const SORTABLE_COLUMNS: Record<string, string> = {
   name: "COALESCE(c.company_name, c.domain)",
   domain: "c.domain",
-  primary_contact: "pc.name",
+  primary_contact: "c.company_name",
   status: "c.status",
   last_activity: "c.last_activity_at",
   next_action: "c.next_action_at",
   renewal: "c.renewal_month",
 };
 
-const BASE_FROM = `FROM companies c
-  LEFT JOIN LATERAL (
-    SELECT name, email, id FROM contacts WHERE company_id = c.id
-    ORDER BY created_at ASC LIMIT 1
-  ) pc ON true`;
+// Normalize `db.execute()` results — drizzle/postgres-js may return a bare
+// array or an object with a `rows` property depending on driver version.
+function toRows<T>(result: unknown): T[] {
+  if (Array.isArray(result)) return result as T[];
+  if (result && typeof result === "object" && Array.isArray((result as { rows?: unknown[] }).rows)) {
+    return (result as { rows: T[] }).rows;
+  }
+  return [];
+}
 
 export default async function GroupsPage({
   searchParams,
@@ -66,48 +70,99 @@ export default async function GroupsPage({
       conditions.push(`(
         c.company_name ILIKE '%${safe}%'
         OR c.domain ILIKE '%${safe}%'
-        OR pc.name ILIKE '%${safe}%'
-        OR pc.email ILIKE '%${safe}%'
       )`);
     }
 
     const whereClause = conditions.length > 0 ? `WHERE ${conditions.join(" AND ")}` : "";
 
-    const countResult = await db.execute(sql.raw(
-      `SELECT count(*) as count
-       ${BASE_FROM}
-       ${whereClause}`
+    // Query 1: count
+    const countRaw = await db.execute(sql.raw(
+      `SELECT count(*)::int AS count FROM companies c ${whereClause}`
     ));
-    total = Number((countResult as unknown as Array<{ count: string }>)[0]?.count ?? 0);
+    total = Number(toRows<{ count: number | string }>(countRaw)[0]?.count ?? 0);
 
-    const rows = await db.execute(sql.raw(
-      `SELECT
-         c.id,
-         c.company_name,
-         c.domain,
-         c.status,
-         c.renewal_month,
-         c.last_activity_at,
-         c.next_action_at,
-         pc.name as primary_contact_name,
-         pc.email as primary_contact_email,
-         (SELECT count(*) FROM email_messages em WHERE em.company_id = c.id) as email_count
-       ${BASE_FROM}
+    // Query 2: companies page (no LATERAL, no subqueries)
+    const companyRaw = await db.execute(sql.raw(
+      `SELECT c.id, c.company_name, c.domain, c.status, c.renewal_month,
+              c.last_activity_at, c.next_action_at
+       FROM companies c
        ${whereClause}
        ORDER BY ${sortCol} ${sortDir} NULLS LAST
        LIMIT ${limit} OFFSET ${offset}`
     ));
-    groups = rows as unknown as GroupRow[];
+    type CompanyRow = {
+      id: string;
+      company_name: string | null;
+      domain: string;
+      status: string;
+      renewal_month: number | null;
+      last_activity_at: string | null;
+      next_action_at: string | null;
+    };
+    const companyRows = toRows<CompanyRow>(companyRaw);
 
-    const statsResult = await db.execute(sql.raw(
-      `SELECT status, count(*) as count FROM companies GROUP BY status`
+    // Query 3: first contact per company (for display)
+    const contactMap = new Map<string, { name: string; email: string }>();
+    if (companyRows.length > 0) {
+      const idList = companyRows.map((c) => `'${c.id}'`).join(",");
+      const contactRaw = await db.execute(sql.raw(
+        `SELECT DISTINCT ON (company_id) company_id, name, email
+         FROM contacts
+         WHERE company_id IN (${idList})
+         ORDER BY company_id, created_at ASC`
+      ));
+      for (const r of toRows<{ company_id: string; name: string; email: string }>(contactRaw)) {
+        contactMap.set(r.company_id, { name: r.name, email: r.email });
+      }
+    }
+
+    // Query 4: email counts per company
+    const emailMap = new Map<string, number>();
+    if (companyRows.length > 0) {
+      const idList = companyRows.map((c) => `'${c.id}'`).join(",");
+      const emailRaw = await db.execute(sql.raw(
+        `SELECT company_id, count(*)::int AS c
+         FROM email_messages
+         WHERE company_id IN (${idList})
+         GROUP BY company_id`
+      ));
+      for (const r of toRows<{ company_id: string; c: number | string }>(emailRaw)) {
+        emailMap.set(r.company_id, Number(r.c));
+      }
+    }
+
+    // Stitch rows together. Force strings/numbers at the boundary so
+    // nothing BigInt-ish leaks into React render.
+    groups = companyRows.map<GroupRow>((c) => ({
+      id: c.id,
+      company_name: c.company_name,
+      domain: c.domain,
+      status: c.status,
+      renewal_month: c.renewal_month === null ? null : Number(c.renewal_month),
+      last_activity_at: c.last_activity_at,
+      next_action_at: c.next_action_at,
+      primary_contact_name: contactMap.get(c.id)?.name ?? null,
+      primary_contact_email: contactMap.get(c.id)?.email ?? null,
+      email_count: String(emailMap.get(c.id) ?? 0),
+    }));
+
+    // Query 5: per-status stats
+    const statsRaw = await db.execute(sql.raw(
+      `SELECT status, count(*)::int AS count FROM companies GROUP BY status`
     ));
-    for (const row of statsResult as unknown as Array<{ status: string; count: string }>) {
+    for (const row of toRows<{ status: string; count: number | string }>(statsRaw)) {
       if (row.status in stats) (stats as Record<string, number>)[row.status] = Number(row.count);
     }
   } catch (err) {
-    errorMessage = err instanceof Error ? err.message : String(err);
+    errorMessage = err instanceof Error ? (err.stack ?? err.message) : String(err);
     console.error("Groups page error:", err);
+  }
+
+  // Surface any migration errors recorded by ensureTables(), even if the
+  // queries above appeared to succeed against a partially-migrated schema.
+  const schemaErr = getLastSchemaError();
+  if (schemaErr) {
+    errorMessage = errorMessage ? `${errorMessage}\n---\nSchema: ${schemaErr}` : `Schema: ${schemaErr}`;
   }
 
   const buildSortLink = (col: string) => {
@@ -129,6 +184,16 @@ export default async function GroupsPage({
   const sortIcon = (col: string) => {
     if (searchParams.sort !== col) return "";
     return searchParams.dir === "desc" ? " ↓" : " ↑";
+  };
+
+  const buildPageHref = (targetPage: number) => {
+    const params = new URLSearchParams();
+    if (searchParams.search) params.set("search", searchParams.search);
+    if (searchParams.status) params.set("status", searchParams.status);
+    if (searchParams.sort) params.set("sort", searchParams.sort);
+    if (searchParams.dir) params.set("dir", searchParams.dir);
+    params.set("page", String(targetPage));
+    return `/groups?${params.toString()}`;
   };
 
   return (
@@ -247,7 +312,7 @@ export default async function GroupsPage({
                       {group.renewal_month ? getMonthName(group.renewal_month) : "—"}
                     </td>
                     <td className="p-3 text-muted-foreground text-xs">
-                      {Number(group.email_count) > 0 ? group.email_count : "—"}
+                      {Number(group.email_count) > 0 ? Number(group.email_count) : "—"}
                     </td>
                   </tr>
                 );
@@ -262,7 +327,7 @@ export default async function GroupsPage({
         <div className="flex gap-2 mt-4 items-center">
           {page > 1 && (
             <Link
-              href={`/groups?${new URLSearchParams({ ...searchParams, page: String(page - 1) } as Record<string, string>).toString()}`}
+              href={buildPageHref(page - 1)}
               className="px-3 py-1 border rounded text-sm hover:bg-muted"
             >
               Previous
@@ -271,7 +336,7 @@ export default async function GroupsPage({
           <span className="px-3 py-1 text-sm text-muted-foreground">Page {page} of {Math.ceil(total / limit)}</span>
           {page * limit < total && (
             <Link
-              href={`/groups?${new URLSearchParams({ ...searchParams, page: String(page + 1) } as Record<string, string>).toString()}`}
+              href={buildPageHref(page + 1)}
               className="px-3 py-1 border rounded text-sm hover:bg-muted"
             >
               Next

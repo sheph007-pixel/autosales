@@ -5,6 +5,11 @@ import * as schema from "./schema/index";
 
 let _db: ReturnType<typeof drizzle<typeof schema>> | null = null;
 let _tablesReady = false;
+let _lastSchemaError: string | null = null;
+
+export function getLastSchemaError(): string | null {
+  return _lastSchemaError;
+}
 
 function getDb() {
   if (!_db) {
@@ -259,21 +264,22 @@ export async function ensureTables() {
         await database.execute(sql.raw(stmt));
       } catch (err) {
         console.error("Groups migration statement failed:", stmt, err);
+        const msg = err instanceof Error ? err.message : String(err);
+        _lastSchemaError = (_lastSchemaError ? _lastSchemaError + "\n" : "") + `${stmt}: ${msg}`;
       }
     }
 
     _tablesReady = true;
   } catch (err) {
     console.error("Failed to ensure tables:", err);
+    _lastSchemaError = err instanceof Error ? err.message : String(err);
+    throw err;
   }
 }
 
 export const db = new Proxy({} as ReturnType<typeof drizzle<typeof schema>>, {
   get(_, prop) {
     const instance = getDb();
-    if (!_tablesReady) {
-      ensureTables().catch(() => {});
-    }
     const value = (instance as unknown as Record<string | symbol, unknown>)[prop];
     if (typeof value === "function") {
       return value.bind(instance);
