@@ -70,6 +70,10 @@ export async function middleware(request: NextRequest) {
     if (!payload.microsoftId) {
       throw new Error("Legacy token");
     }
+    // Redirect root to /groups
+    if (pathname === "/") {
+      return NextResponse.redirect(new URL("/groups", baseUrl));
+    }
     return NextResponse.next();
   } catch {
     const response = NextResponse.redirect(new URL("/login", baseUrl));

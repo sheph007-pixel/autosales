@@ -49,6 +49,7 @@ export default async function GroupsPage({
   let groups: GroupRow[] = [];
   let total = 0;
   let stats = { lead: 0, current_client: 0, old_client: 0, not_qualified: 0 };
+  let errorMessage: string | null = null;
 
   try {
     // Ensure schema is migrated before querying
@@ -104,8 +105,9 @@ export default async function GroupsPage({
     for (const row of statsResult as unknown as Array<{ status: string; count: string }>) {
       if (row.status in stats) (stats as Record<string, number>)[row.status] = Number(row.count);
     }
-  } catch {
-    // DB not ready yet
+  } catch (err) {
+    errorMessage = err instanceof Error ? err.message : String(err);
+    console.error("Groups page error:", err);
   }
 
   const buildSortLink = (col: string) => {
@@ -131,6 +133,12 @@ export default async function GroupsPage({
 
   return (
     <div>
+      {errorMessage && (
+        <div className="mb-4 p-4 bg-red-50 border border-red-200 rounded">
+          <p className="text-sm font-medium text-red-900">Error loading groups:</p>
+          <p className="text-xs text-red-700 mt-1 font-mono break-all">{errorMessage}</p>
+        </div>
+      )}
       {/* Header */}
       <div className="flex items-center justify-between mb-4">
         <h1 className="text-2xl font-bold">Groups ({total})</h1>
