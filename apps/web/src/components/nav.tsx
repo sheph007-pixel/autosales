@@ -5,9 +5,7 @@ import { usePathname } from "next/navigation";
 import { cn } from "@/components/ui/utils";
 
 const navItems = [
-  { href: "/", label: "Dashboard", icon: "grid" },
-  { href: "/domains", label: "Domains", icon: "globe" },
-  { href: "/contacts", label: "Leads", icon: "users" },
+  { href: "/groups", label: "Groups", icon: "globe" },
   { href: "/inbox", label: "Inbox", icon: "mail" },
   { href: "/cadences", label: "Cadences", icon: "repeat" },
   { href: "/import", label: "Import", icon: "upload" },

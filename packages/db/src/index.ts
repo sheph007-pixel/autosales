@@ -58,7 +58,7 @@ CREATE TABLE companies (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   domain VARCHAR(255) NOT NULL UNIQUE,
   company_name VARCHAR(255),
-  status VARCHAR(50) NOT NULL DEFAULT 'prospect',
+  status VARCHAR(50) NOT NULL DEFAULT 'lead',
   renewal_month INTEGER,
   has_group_health_plan BOOLEAN,
   interest_status VARCHAR(50) DEFAULT 'unknown',
@@ -66,6 +66,7 @@ CREATE TABLE companies (
   last_activity_at TIMESTAMPTZ,
   do_not_contact BOOLEAN NOT NULL DEFAULT false,
   summary TEXT,
+  primary_contact_id UUID,
   created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
   updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
@@ -217,27 +218,55 @@ CREATE TABLE job_runs (
 );
 `;
 
+// Idempotent migration: adds primary_contact_id, remaps statuses, backfills.
+// Safe to run on every startup — all statements use IF NOT EXISTS or are idempotent.
+const GROUPS_MIGRATION_SQL = `
+ALTER TABLE companies ADD COLUMN IF NOT EXISTS primary_contact_id UUID;
+ALTER TABLE companies ALTER COLUMN status SET DEFAULT 'lead';
+UPDATE companies SET status = 'current_client' WHERE status = 'client';
+UPDATE companies SET status = 'old_client' WHERE status = 'dormant';
+UPDATE companies SET status = 'lead' WHERE status IN ('prospect','active_opportunity','quoted');
+UPDATE companies SET status = 'not_qualified' WHERE status = 'suppressed';
+UPDATE companies c
+  SET primary_contact_id = (
+    SELECT id FROM contacts
+    WHERE company_id = c.id
+    ORDER BY created_at ASC
+    LIMIT 1
+  )
+  WHERE primary_contact_id IS NULL;
+`;
+
 export async function ensureTables() {
   if (_tablesReady) return;
   try {
     const database = getDb();
 
     // Check if schema version matches
+    let versionMatches = false;
     try {
       const result = await database.execute(sql`SELECT version FROM _schema_version LIMIT 1`);
       const rows = result as unknown as Array<{ version: string }>;
       if (rows.length > 0 && rows[0]?.version === SCHEMA_VERSION) {
-        _tablesReady = true;
-        return;
+        versionMatches = true;
       }
     } catch {
-      // Table doesn't exist or query failed — need to create schema
+      // Table doesn't exist — need to create schema
     }
 
-    // Schema is outdated or missing — recreate everything
-    console.log("Schema version mismatch or missing. Recreating all tables...");
-    await database.execute(sql.raw(FULL_SCHEMA_SQL));
-    console.log("All tables created successfully.");
+    if (!versionMatches) {
+      console.log("Schema version mismatch or missing. Recreating all tables...");
+      await database.execute(sql.raw(FULL_SCHEMA_SQL));
+      console.log("All tables created successfully.");
+    }
+
+    // Always run idempotent migration for Groups refactor (v3 → Groups)
+    try {
+      await database.execute(sql.raw(GROUPS_MIGRATION_SQL));
+    } catch (err) {
+      console.error("Groups migration failed:", err);
+    }
+
     _tablesReady = true;
   } catch (err) {
     console.error("Failed to ensure tables:", err);

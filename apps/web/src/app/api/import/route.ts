@@ -116,10 +116,20 @@ export async function POST(request: NextRequest) {
             WHERE email = ${email}
           `);
         } else {
-          await db.execute(sql`
+          const inserted = await db.execute(sql`
             INSERT INTO contacts (company_id, email, name, title, phone, metadata, created_at, updated_at)
             VALUES (${companyId}::uuid, ${email}, ${name}, ${title || null}, ${phone || null}, ${metaJson}::jsonb, now(), now())
+            RETURNING id
           `);
+          const insertedRows = inserted as unknown as Array<{ id: string }>;
+          const newContactId = insertedRows[0]?.id;
+          if (newContactId) {
+            // Set as primary contact if group doesn't have one yet
+            await db.execute(sql`
+              UPDATE companies SET primary_contact_id = ${newContactId}::uuid
+              WHERE id = ${companyId}::uuid AND primary_contact_id IS NULL
+            `);
+          }
         }
         imported++;
       } catch (err) {

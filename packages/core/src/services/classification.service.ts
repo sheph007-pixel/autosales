@@ -52,11 +52,11 @@ export async function applyClassification(
   switch (result.category) {
     case "interested":
       companyUpdates.interestStatus = "interested";
-      companyUpdates.status = "active_opportunity";
+      // Status stays as-is (lead → still lead until human qualifies)
       break;
     case "not_interested":
       companyUpdates.interestStatus = "not_interested";
-      if (autoApply) companyUpdates.status = "dormant";
+      if (autoApply) companyUpdates.status = "not_qualified";
       break;
     case "follow_up_later":
       companyUpdates.interestStatus = "follow_up_later";
@@ -76,7 +76,7 @@ export async function applyClassification(
       break;
     case "unsubscribe":
       companyUpdates.doNotContact = true;
-      companyUpdates.status = "suppressed";
+      companyUpdates.status = "not_qualified";
       break;
   }
 

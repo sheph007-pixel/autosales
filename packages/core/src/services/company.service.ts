@@ -26,7 +26,7 @@ export async function findOrCreateCompany(domain: string, companyName?: string):
     .values({
       domain: domain.toLowerCase(),
       companyName: companyName ?? null,
-      status: "prospect",
+      status: "lead",
       interestStatus: "unknown",
     })
     .returning();
@@ -141,11 +141,10 @@ export async function getCompaniesNeedingAction(limit: number = 20) {
 export async function getDashboardStats() {
   const [stats] = await db.select({
     total: sql<number>`count(*)`,
-    prospects: sql<number>`count(*) filter (where ${companies.status} = 'prospect')`,
-    activeOpportunities: sql<number>`count(*) filter (where ${companies.status} = 'active_opportunity')`,
-    clients: sql<number>`count(*) filter (where ${companies.status} = 'client')`,
-    quoted: sql<number>`count(*) filter (where ${companies.status} = 'quoted')`,
-    suppressed: sql<number>`count(*) filter (where ${companies.status} = 'suppressed')`,
+    leads: sql<number>`count(*) filter (where ${companies.status} = 'lead')`,
+    currentClients: sql<number>`count(*) filter (where ${companies.status} = 'current_client')`,
+    oldClients: sql<number>`count(*) filter (where ${companies.status} = 'old_client')`,
+    notQualified: sql<number>`count(*) filter (where ${companies.status} = 'not_qualified')`,
     withRenewal: sql<number>`count(*) filter (where ${companies.renewalMonth} is not null)`,
     needsAction: sql<number>`count(*) filter (where ${companies.nextActionAt} <= now() and ${companies.doNotContact} = false)`,
   }).from(companies);
