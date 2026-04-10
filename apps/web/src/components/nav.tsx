@@ -6,8 +6,8 @@ import { cn } from "@/components/ui/utils";
 
 const navItems = [
   { href: "/groups", label: "Groups", icon: "globe" },
+  { href: "/campaigns", label: "Campaigns", icon: "repeat" },
   { href: "/inbox", label: "Inbox", icon: "mail" },
-  { href: "/cadences", label: "Cadences", icon: "repeat" },
   { href: "/import", label: "Import", icon: "upload" },
   { href: "/settings", label: "Settings", icon: "settings" },
 ];

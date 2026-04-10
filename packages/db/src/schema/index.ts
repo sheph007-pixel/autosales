@@ -36,3 +36,6 @@ export type { OAuthAccount, NewOAuthAccount } from "./oauth-accounts";
 
 export { jobRuns } from "./job-runs";
 export type { JobRun, NewJobRun } from "./job-runs";
+
+export { agentProfile } from "./agent-profile";
+export type { AgentProfile, NewAgentProfile } from "./agent-profile";

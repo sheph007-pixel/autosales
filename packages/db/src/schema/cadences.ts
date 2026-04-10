@@ -1,4 +1,4 @@
-import { pgTable, uuid, varchar, text, boolean, timestamp, integer, index } from "drizzle-orm/pg-core";
+import { pgTable, uuid, varchar, text, boolean, timestamp, integer, jsonb, index } from "drizzle-orm/pg-core";
 
 export const cadences = pgTable("cadences", {
   id: uuid("id").primaryKey().defaultRandom(),
@@ -6,6 +6,15 @@ export const cadences = pgTable("cadences", {
   description: text("description"),
   triggerType: varchar("trigger_type", { length: 50 }).notNull().default("manual"),
   isActive: boolean("is_active").notNull().default(true),
+  goal: text("goal"),
+  instructions: text("instructions"),
+  allowedStatuses: jsonb("allowed_statuses").$type<string[]>().notNull().default(["lead"]),
+  filterJson: jsonb("filter_json").$type<Record<string, unknown>>().notNull().default({}),
+  dailyLimit: integer("daily_limit"),
+  hourlyLimit: integer("hourly_limit"),
+  minimumDelaySeconds: integer("minimum_delay_seconds"),
+  lastRunAt: timestamp("last_run_at", { withTimezone: true }),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
 });
 

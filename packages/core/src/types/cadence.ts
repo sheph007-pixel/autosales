@@ -15,6 +15,18 @@ export const CADENCE_ACTION_TYPES = [
 
 export type CadenceActionType = (typeof CADENCE_ACTION_TYPES)[number];
 
+export interface AgentProfileContext {
+  name: string;
+  company: string;
+  identity: string | null;
+  targetDescription: string | null;
+  offerDescription: string | null;
+  goals: string | null;
+  toneRules: string | null;
+  systemInstructions: string | null;
+  guardrails: string | null;
+}
+
 export interface CadenceContext {
   companyId: string;
   contactId: string;
@@ -30,4 +42,7 @@ export interface CadenceContext {
   stepNumber: number;
   stepPrompt: string | null;
   cadenceName: string;
+  campaignGoal: string | null;
+  campaignInstructions: string | null;
+  agentProfile: AgentProfileContext | null;
 }

@@ -1,4 +1,6 @@
-export const GENERATE_EMAIL_SYSTEM = `You are an AI assistant helping a group health insurance broker craft outbound sales emails to employer prospects.
+import type { CadenceContext } from "@autosales/core";
+
+const DEFAULT_SYSTEM = `You are an AI assistant helping a group health insurance broker craft outbound sales emails to employer prospects.
 
 Rules:
 - Write concise, professional emails appropriate for benefits/HR decision-makers
@@ -14,48 +16,75 @@ Rules:
 - If prior objections exist, address them thoughtfully
 - Sign emails as the broker (do not include a signature block — the system adds one)`;
 
-export function buildGenerateEmailPrompt(opts: {
-  contactName: string;
-  contactEmail: string;
-  companyName: string | null;
-  domain: string;
-  renewalMonth: number | null;
-  hasGroupHealthPlan: boolean | null;
-  interestStatus: string | null;
-  domainSummary: string | null;
-  conversationHistory: string | null;
-  stepNumber: number;
-  stepPrompt: string | null;
-  cadenceName: string;
-}): string {
-  let prompt = `Generate an outbound email for step ${opts.stepNumber} of the "${opts.cadenceName}" cadence.\n\n`;
+// Build the system prompt, blending the default with the agent profile (if any).
+export function buildGenerateEmailSystemPrompt(ctx: CadenceContext): string {
+  const profile = ctx.agentProfile;
+  if (!profile) return DEFAULT_SYSTEM;
 
-  prompt += `Recipient: ${opts.contactName} <${opts.contactEmail}>\n`;
-  prompt += `Company: ${opts.companyName ?? opts.domain}\n`;
-  prompt += `Domain: ${opts.domain}\n`;
+  const parts: string[] = [];
+  parts.push(
+    `You are writing outbound sales emails as ${profile.name} at ${profile.company}. ` +
+      `Your job is to sound like a real human broker, not a template.`
+  );
+  if (profile.identity) parts.push(`\nWho you are:\n${profile.identity}`);
+  if (profile.offerDescription) parts.push(`\nWhat ${profile.company} offers:\n${profile.offerDescription}`);
+  if (profile.targetDescription) parts.push(`\nWho you target:\n${profile.targetDescription}`);
+  if (profile.goals) parts.push(`\nYour core goals:\n${profile.goals}`);
+  if (profile.toneRules) parts.push(`\nTone rules:\n${profile.toneRules}`);
+  if (profile.guardrails) parts.push(`\nGuardrails — never do these:\n${profile.guardrails}`);
+  if (profile.systemInstructions) parts.push(`\nAdditional instructions:\n${profile.systemInstructions}`);
 
-  if (opts.renewalMonth) {
-    prompt += `Known renewal month: ${opts.renewalMonth}\n`;
+  parts.push(
+    `\nFormat rules:\n` +
+      `- Keep emails under 150 words unless context requires more\n` +
+      `- Vary language between steps — never sound templated\n` +
+      `- Include a clear but soft call-to-action\n` +
+      `- Reference renewal timing, prior conversations, or known objections when available\n` +
+      `- Do not include a signature block — the system adds one`
+  );
+
+  return parts.join("\n");
+}
+
+// Keep the exported constant for any legacy callers, but prefer the builder.
+export const GENERATE_EMAIL_SYSTEM = DEFAULT_SYSTEM;
+
+export function buildGenerateEmailPrompt(ctx: CadenceContext): string {
+  let prompt = `Generate an outbound email for step ${ctx.stepNumber} of the "${ctx.cadenceName}" campaign.\n\n`;
+
+  if (ctx.campaignGoal) {
+    prompt += `Campaign goal:\n${ctx.campaignGoal}\n\n`;
+  }
+  if (ctx.campaignInstructions) {
+    prompt += `Campaign-specific instructions:\n${ctx.campaignInstructions}\n\n`;
   }
 
-  if (opts.hasGroupHealthPlan !== null) {
-    prompt += `Has group health plan: ${opts.hasGroupHealthPlan ? "Yes" : "No/Unknown"}\n`;
+  prompt += `Recipient: ${ctx.contactName} <${ctx.contactEmail}>\n`;
+  prompt += `Company: ${ctx.companyName ?? ctx.domain}\n`;
+  prompt += `Domain: ${ctx.domain}\n`;
+
+  if (ctx.renewalMonth) {
+    prompt += `Known renewal month: ${ctx.renewalMonth}\n`;
   }
 
-  if (opts.interestStatus && opts.interestStatus !== "unknown") {
-    prompt += `Interest status: ${opts.interestStatus}\n`;
+  if (ctx.hasGroupHealthPlan !== null) {
+    prompt += `Has group health plan: ${ctx.hasGroupHealthPlan ? "Yes" : "No/Unknown"}\n`;
   }
 
-  if (opts.domainSummary) {
-    prompt += `\nDomain memory:\n${opts.domainSummary}\n`;
+  if (ctx.interestStatus && ctx.interestStatus !== "unknown") {
+    prompt += `Interest status: ${ctx.interestStatus}\n`;
   }
 
-  if (opts.conversationHistory) {
-    prompt += `\nConversation status:\n${opts.conversationHistory}\n`;
+  if (ctx.domainSummary) {
+    prompt += `\nGroup memory:\n${ctx.domainSummary}\n`;
   }
 
-  if (opts.stepPrompt) {
-    prompt += `\nStep-specific guidance:\n${opts.stepPrompt}\n`;
+  if (ctx.conversationHistory) {
+    prompt += `\nConversation status:\n${ctx.conversationHistory}\n`;
+  }
+
+  if (ctx.stepPrompt) {
+    prompt += `\nStep-specific guidance:\n${ctx.stepPrompt}\n`;
   }
 
   prompt += `\nGenerate a unique, context-aware email. Respond with a JSON object with "subject", "body", and "reasoning" fields.`;

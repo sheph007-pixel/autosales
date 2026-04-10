@@ -2,10 +2,10 @@ import PgBoss from "pg-boss";
 import { handleSyncMailbox } from "./jobs/sync-mailbox";
 import { handleClassifyMessage } from "./jobs/classify-message";
 import { handleRefreshDomainMemory } from "./jobs/refresh-domain-memory";
-import { handleExecuteCadenceStep } from "./jobs/execute-cadence-step";
+import { makeExecuteCadenceStepHandler } from "./jobs/execute-cadence-step";
 import { handleSendEmail } from "./jobs/send-email";
 import { handleProcessReply } from "./jobs/process-reply";
-import { handleScheduleCadences } from "./jobs/schedule-cadences";
+import { makeScheduleCadencesHandler } from "./jobs/schedule-cadences";
 
 const DATABASE_URL = process.env.DATABASE_URL;
 if (!DATABASE_URL) {
@@ -40,6 +40,9 @@ async function main() {
   console.log("pg-boss started.");
 
   // Register job handlers
+  const handleExecuteCadenceStep = makeExecuteCadenceStepHandler(boss);
+  const handleScheduleCadences = makeScheduleCadencesHandler(boss);
+
   await boss.work("sync-mailbox", singleJobHandler(handleSyncMailbox));
   await boss.work("classify-message", singleJobHandler(handleClassifyMessage));
   await boss.work("refresh-domain-memory", singleJobHandler(handleRefreshDomainMemory));

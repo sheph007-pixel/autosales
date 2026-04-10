@@ -5,6 +5,16 @@ import { notFound } from "next/navigation";
 import { getMonthName, STATUS_LABELS, STATUS_COLORS, type CompanyStatus } from "@autosales/core";
 import { GroupActions } from "@/components/group-actions";
 
+interface CampaignMembershipRow {
+  enrollment_id: string;
+  campaign_id: string;
+  campaign_name: string;
+  status: string;
+  current_step: number;
+  next_step_at: string | null;
+  started_at: string;
+}
+
 export const dynamic = "force-dynamic";
 
 interface GroupDetail {
@@ -45,6 +55,7 @@ export default async function GroupDetailPage({ params }: { params: { id: string
   type MemoryRow = { summary: string | null; conversation_status: string | null; next_steps: string | null };
   let memory: MemoryRow | null = null;
   let tasks: Array<{ id: string; description: string; type: string; status: string; due_at: string | null }> = [];
+  let memberships: CampaignMembershipRow[] = [];
 
   try {
     await ensureTables();
@@ -97,6 +108,23 @@ export default async function GroupDetailPage({ params }: { params: { id: string
           ORDER BY created_at DESC LIMIT 20
         `);
         tasks = taskRows as unknown as typeof tasks;
+      } catch {}
+
+      try {
+        const membershipRows = await db.execute(sql`
+          SELECT e.id AS enrollment_id,
+                 c.id AS campaign_id,
+                 c.name AS campaign_name,
+                 e.status,
+                 e.current_step,
+                 e.next_step_at,
+                 e.started_at
+          FROM enrollments e
+          INNER JOIN cadences c ON c.id = e.cadence_id
+          WHERE e.company_id = ${params.id}::uuid
+          ORDER BY e.started_at DESC
+        `);
+        memberships = membershipRows as unknown as CampaignMembershipRow[];
       } catch {}
     }
   } catch {}
@@ -278,6 +306,31 @@ export default async function GroupDetailPage({ params }: { params: { id: string
               </div>
             </div>
           )}
+
+          {/* Campaigns */}
+          <div className="bg-card border rounded-lg p-4">
+            <h2 className="font-semibold mb-3">Campaigns</h2>
+            {memberships.length === 0 ? (
+              <p className="text-sm text-muted-foreground">Not in any campaigns.</p>
+            ) : (
+              <div className="space-y-2">
+                {memberships.map((m) => (
+                  <div key={m.enrollment_id} className="text-sm border-b pb-2 last:border-0">
+                    <Link
+                      href={`/campaigns/${m.campaign_id}`}
+                      className="font-medium text-primary hover:underline"
+                    >
+                      {m.campaign_name}
+                    </Link>
+                    <p className="text-muted-foreground text-xs">
+                      Step {m.current_step} · {m.status}
+                      {m.next_step_at && ` · next ${new Date(m.next_step_at).toLocaleDateString()}`}
+                    </p>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
 
           {/* Tasks */}
           {tasks.length > 0 && (

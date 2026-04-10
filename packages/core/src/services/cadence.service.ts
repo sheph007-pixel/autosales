@@ -1,21 +1,40 @@
-import { eq, and, lte, desc, sql } from "drizzle-orm";
+import { eq, and, lte, desc } from "drizzle-orm";
 import { db, cadences, cadenceSteps, enrollments, companies, contacts, domainMemory } from "@autosales/db";
-import type { Cadence, NewCadence, CadenceStep, NewCadenceStep, Enrollment } from "@autosales/db";
+import type { Cadence, Enrollment } from "@autosales/db";
 import { addDays } from "../utils/date-utils";
-import type { CadenceContext } from "../types/cadence";
+import type { CadenceContext, AgentProfileContext } from "../types/cadence";
+import { getAgentProfile } from "./agent-profile.service";
 
-export async function createCadence(data: {
+export interface CampaignInput {
   name: string;
-  description?: string;
+  description?: string | null;
   triggerType?: string;
+  goal?: string | null;
+  instructions?: string | null;
+  allowedStatuses?: string[];
+  filterJson?: Record<string, unknown>;
+  dailyLimit?: number | null;
+  hourlyLimit?: number | null;
+  minimumDelaySeconds?: number | null;
+  isActive?: boolean;
   steps: { delayDays: number; actionType?: string; templatePrompt: string }[];
-}): Promise<Cadence> {
+}
+
+export async function createCadence(data: CampaignInput): Promise<Cadence> {
   const [cadence] = await db
     .insert(cadences)
     .values({
       name: data.name,
       description: data.description ?? null,
       triggerType: data.triggerType ?? "manual",
+      goal: data.goal ?? null,
+      instructions: data.instructions ?? null,
+      allowedStatuses: data.allowedStatuses ?? ["lead"],
+      filterJson: data.filterJson ?? {},
+      dailyLimit: data.dailyLimit ?? null,
+      hourlyLimit: data.hourlyLimit ?? null,
+      minimumDelaySeconds: data.minimumDelaySeconds ?? null,
+      isActive: data.isActive ?? true,
     })
     .returning();
 
@@ -31,6 +50,39 @@ export async function createCadence(data: {
   }
 
   return cadence!;
+}
+
+export async function updateCadence(
+  id: string,
+  data: Partial<Omit<CampaignInput, "steps">>
+): Promise<Cadence | null> {
+  const set: Record<string, unknown> = { updatedAt: new Date() };
+  if (data.name !== undefined) set.name = data.name;
+  if (data.description !== undefined) set.description = data.description;
+  if (data.triggerType !== undefined) set.triggerType = data.triggerType;
+  if (data.goal !== undefined) set.goal = data.goal;
+  if (data.instructions !== undefined) set.instructions = data.instructions;
+  if (data.allowedStatuses !== undefined) set.allowedStatuses = data.allowedStatuses;
+  if (data.filterJson !== undefined) set.filterJson = data.filterJson;
+  if (data.dailyLimit !== undefined) set.dailyLimit = data.dailyLimit;
+  if (data.hourlyLimit !== undefined) set.hourlyLimit = data.hourlyLimit;
+  if (data.minimumDelaySeconds !== undefined) set.minimumDelaySeconds = data.minimumDelaySeconds;
+  if (data.isActive !== undefined) set.isActive = data.isActive;
+
+  const [updated] = await db
+    .update(cadences)
+    .set(set)
+    .where(eq(cadences.id, id))
+    .returning();
+  return updated ?? null;
+}
+
+export async function setCadenceActive(id: string, isActive: boolean): Promise<Cadence | null> {
+  return updateCadence(id, { isActive });
+}
+
+export async function deleteCadence(id: string): Promise<void> {
+  await db.delete(cadences).where(eq(cadences.id, id));
 }
 
 export async function getCadence(id: string) {
@@ -214,6 +266,21 @@ export async function buildCadenceContext(enrollmentId: string): Promise<Cadence
 
   if (!company || !contact || !cadence) return null;
 
+  const profile = await getAgentProfile();
+  const agentProfileCtx: AgentProfileContext | null = profile
+    ? {
+        name: profile.name,
+        company: profile.company,
+        identity: profile.identity,
+        targetDescription: profile.targetDescription,
+        offerDescription: profile.offerDescription,
+        goals: profile.goals,
+        toneRules: profile.toneRules,
+        systemInstructions: profile.systemInstructions,
+        guardrails: profile.guardrails,
+      }
+    : null;
+
   return {
     companyId: company.id,
     contactId: contact.id,
@@ -229,6 +296,9 @@ export async function buildCadenceContext(enrollmentId: string): Promise<Cadence
     stepNumber: enrollment.currentStep,
     stepPrompt: step?.templatePrompt ?? null,
     cadenceName: cadence.name,
+    campaignGoal: cadence.goal ?? null,
+    campaignInstructions: cadence.instructions ?? null,
+    agentProfile: agentProfileCtx,
   };
 }
 

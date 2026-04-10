@@ -1,6 +1,6 @@
 import { getOpenAIClient, MODEL } from "../client";
 import { emailGenerationSchema, type EmailGeneration } from "../extract/schemas";
-import { GENERATE_EMAIL_SYSTEM, buildGenerateEmailPrompt } from "../prompts/generate-email";
+import { buildGenerateEmailSystemPrompt, buildGenerateEmailPrompt } from "../prompts/generate-email";
 import type { CadenceContext } from "@autosales/core";
 
 export async function generateOutboundEmail(context: CadenceContext): Promise<EmailGeneration> {
@@ -9,7 +9,7 @@ export async function generateOutboundEmail(context: CadenceContext): Promise<Em
   const response = await client.chat.completions.create({
     model: MODEL,
     messages: [
-      { role: "system", content: GENERATE_EMAIL_SYSTEM },
+      { role: "system", content: buildGenerateEmailSystemPrompt(context) },
       { role: "user", content: buildGenerateEmailPrompt(context) },
     ],
     response_format: {

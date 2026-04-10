@@ -138,6 +138,15 @@ CREATE TABLE cadences (
   description TEXT,
   trigger_type VARCHAR(50) NOT NULL DEFAULT 'manual',
   is_active BOOLEAN NOT NULL DEFAULT true,
+  goal TEXT,
+  instructions TEXT,
+  allowed_statuses JSONB NOT NULL DEFAULT '["lead"]',
+  filter_json JSONB NOT NULL DEFAULT '{}',
+  daily_limit INTEGER,
+  hourly_limit INTEGER,
+  minimum_delay_seconds INTEGER,
+  last_run_at TIMESTAMPTZ,
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
   created_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
@@ -221,11 +230,30 @@ CREATE TABLE job_runs (
   metadata JSONB DEFAULT '{}',
   created_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
+
+CREATE TABLE agent_profile (
+  singleton BOOLEAN PRIMARY KEY DEFAULT true,
+  name TEXT NOT NULL DEFAULT 'Hunter Shepherd',
+  company TEXT NOT NULL DEFAULT 'Kennion',
+  identity TEXT,
+  target_description TEXT,
+  offer_description TEXT,
+  goals TEXT,
+  tone_rules TEXT,
+  system_instructions TEXT,
+  guardrails TEXT,
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  CHECK (singleton = true)
+);
+
+INSERT INTO agent_profile (singleton) VALUES (true) ON CONFLICT DO NOTHING;
 `;
 
-// Idempotent migration statements: adds primary_contact_id, remaps statuses, backfills.
+// Idempotent migration statements: adds primary_contact_id, remaps statuses, backfills,
+// adds campaign fields to cadences, creates agent_profile singleton.
 // Each statement is run individually to avoid multi-statement issues with postgres.js.
 const GROUPS_MIGRATION_STATEMENTS = [
+  // Groups / companies
   `ALTER TABLE companies ADD COLUMN IF NOT EXISTS primary_contact_id UUID`,
   `ALTER TABLE companies ALTER COLUMN status SET DEFAULT 'lead'`,
   `UPDATE companies SET status = 'current_client' WHERE status = 'client'`,
@@ -233,6 +261,34 @@ const GROUPS_MIGRATION_STATEMENTS = [
   `UPDATE companies SET status = 'lead' WHERE status IN ('prospect','active_opportunity','quoted')`,
   `UPDATE companies SET status = 'not_qualified' WHERE status = 'suppressed'`,
   `UPDATE companies c SET primary_contact_id = (SELECT id FROM contacts WHERE company_id = c.id ORDER BY created_at ASC LIMIT 1) WHERE primary_contact_id IS NULL`,
+
+  // Campaigns: extend cadences table with campaign fields
+  `ALTER TABLE cadences ADD COLUMN IF NOT EXISTS goal TEXT`,
+  `ALTER TABLE cadences ADD COLUMN IF NOT EXISTS instructions TEXT`,
+  `ALTER TABLE cadences ADD COLUMN IF NOT EXISTS allowed_statuses JSONB NOT NULL DEFAULT '["lead"]'`,
+  `ALTER TABLE cadences ADD COLUMN IF NOT EXISTS filter_json JSONB NOT NULL DEFAULT '{}'`,
+  `ALTER TABLE cadences ADD COLUMN IF NOT EXISTS daily_limit INTEGER`,
+  `ALTER TABLE cadences ADD COLUMN IF NOT EXISTS hourly_limit INTEGER`,
+  `ALTER TABLE cadences ADD COLUMN IF NOT EXISTS minimum_delay_seconds INTEGER`,
+  `ALTER TABLE cadences ADD COLUMN IF NOT EXISTS last_run_at TIMESTAMPTZ`,
+  `ALTER TABLE cadences ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ NOT NULL DEFAULT now()`,
+
+  // Agent profile: single-row global playbook
+  `CREATE TABLE IF NOT EXISTS agent_profile (
+    singleton BOOLEAN PRIMARY KEY DEFAULT true,
+    name TEXT NOT NULL DEFAULT 'Hunter Shepherd',
+    company TEXT NOT NULL DEFAULT 'Kennion',
+    identity TEXT,
+    target_description TEXT,
+    offer_description TEXT,
+    goals TEXT,
+    tone_rules TEXT,
+    system_instructions TEXT,
+    guardrails TEXT,
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    CHECK (singleton = true)
+  )`,
+  `INSERT INTO agent_profile (singleton) VALUES (true) ON CONFLICT DO NOTHING`,
 ];
 
 export async function ensureTables() {
