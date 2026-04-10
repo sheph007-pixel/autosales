@@ -51,7 +51,10 @@ export default async function InboxPage() {
 
   return (
     <div>
-      <h1 className="text-2xl font-bold mb-6">Inbox / Reply Queue</h1>
+      <h1 className="text-2xl font-bold mb-1">Inbox</h1>
+      <p className="text-sm text-muted-foreground mb-6">
+        Inbound replies, matched back to their Group.
+      </p>
 
       {/* Unclassified replies */}
       <div className="mb-8">
@@ -70,7 +73,7 @@ export default async function InboxPage() {
                       <span className="font-medium text-sm">{msg.fromAddress}</span>
                       {msg.companyDomain && (
                         <Link
-                          href={`/domains/${msg.companyId}`}
+                          href={`/groups/${msg.companyId}`}
                           className="text-xs text-primary hover:underline"
                         >
                           {msg.companyDomain}
@@ -112,7 +115,7 @@ export default async function InboxPage() {
                       <span className="font-medium text-sm">{msg.fromAddress}</span>
                       {msg.companyDomain && (
                         <Link
-                          href={`/domains/${msg.companyId}`}
+                          href={`/groups/${msg.companyId}`}
                           className="text-xs text-primary hover:underline"
                         >
                           {msg.companyDomain}

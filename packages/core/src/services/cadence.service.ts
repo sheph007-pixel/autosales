@@ -34,7 +34,9 @@ export async function createCadence(data: CampaignInput): Promise<Cadence> {
       dailyLimit: data.dailyLimit ?? null,
       hourlyLimit: data.hourlyLimit ?? null,
       minimumDelaySeconds: data.minimumDelaySeconds ?? null,
-      isActive: data.isActive ?? true,
+      // Safety: new campaigns default to paused. User must explicitly Start
+      // from the detail page after reviewing the targeting preview.
+      isActive: data.isActive ?? false,
     })
     .returning();
 

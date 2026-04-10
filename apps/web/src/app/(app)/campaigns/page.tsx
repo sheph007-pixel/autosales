@@ -1,7 +1,8 @@
 import { db, ensureTables, cadences, enrollments } from "@autosales/db";
-import { eq, desc, sql } from "drizzle-orm";
+import { desc, sql } from "drizzle-orm";
 import Link from "next/link";
 import { CreateCampaignForm } from "@/components/campaign-form";
+import { CampaignRowControls } from "@/components/campaign-row-controls";
 import { STATUS_LABELS, type CompanyStatus } from "@autosales/core";
 
 export const dynamic = "force-dynamic";
@@ -94,10 +95,11 @@ async function renderCampaignsPage() {
                 <thead className="bg-muted">
                   <tr>
                     <th className="text-left p-3 font-medium">Name</th>
-                    <th className="text-left p-3 font-medium">Target</th>
-                    <th className="text-left p-3 font-medium">Status</th>
+                    <th className="text-left p-3 font-medium">Targets</th>
+                    <th className="text-left p-3 font-medium">State</th>
                     <th className="text-left p-3 font-medium">Active / Total</th>
                     <th className="text-left p-3 font-medium">Last run</th>
+                    <th className="text-left p-3 font-medium w-24">Control</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -133,6 +135,9 @@ async function renderCampaignsPage() {
                         </td>
                         <td className="p-3 text-xs text-muted-foreground">
                           {c.lastRunAt ? new Date(c.lastRunAt).toLocaleString() : "—"}
+                        </td>
+                        <td className="p-3">
+                          <CampaignRowControls campaignId={c.id} isActive={c.isActive} />
                         </td>
                       </tr>
                     );

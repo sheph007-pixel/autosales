@@ -1,21 +1,27 @@
 import type PgBoss from "pg-boss";
-import { db, cadences, companies, contacts, enrollments, auditLogs } from "@autosales/db";
-import { eq, and, lte, sql, gte, desc, notInArray, inArray, isNull } from "drizzle-orm";
+import { db, cadences, enrollments, auditLogs } from "@autosales/db";
+import { eq, and, sql, gte, inArray, desc } from "drizzle-orm";
 import { getDueEnrollments } from "@autosales/core/services/cadence.service";
-import { addDays } from "@autosales/core/utils/date-utils";
+import {
+  resolveEligibleGroups,
+  type CampaignFilter,
+} from "@autosales/core/services/campaign-targeting.service";
 
-function daysAgo(n: number): Date {
-  return new Date(Date.now() - n * 24 * 60 * 60 * 1000);
-}
+const MAX_ENROLLMENTS_PER_CAMPAIGN_PER_TICK = 25;
 
 /**
- * Campaign automation tick. Runs on a schedule.
+ * Campaign automation tick. Runs every 15 minutes via pg-boss cron.
  *
- * For each active campaign:
- *  1. Enroll eligible groups that match `allowed_statuses` and `filter_json`
- *     but aren't already enrolled in an active state.
- *  2. Respect daily_limit — skip enrollments if today's send count is already
- *     at the limit for this campaign.
+ * For each ACTIVE campaign:
+ *  1. Enforce sending limits (daily, hourly, minimum_delay_seconds). All
+ *     limits are scoped PER CAMPAIGN via audit_logs.entity_id. If any limit
+ *     is hit, skip enrollment for this campaign this tick.
+ *  2. Compute eligible groups via the shared `resolveEligibleGroups`
+ *     helper (same logic used by the preview action).
+ *  3. Enroll new groups that aren't already in this campaign with an
+ *     active/replied/completed status. Cap at
+ *     MAX_ENROLLMENTS_PER_CAMPAIGN_PER_TICK per tick.
+ *  4. Update `cadences.last_run_at`.
  *
  * Then, queue every due enrollment as an execute-cadence-step job.
  */
@@ -23,76 +29,86 @@ export function makeScheduleCadencesHandler(boss: PgBoss) {
   return async function handleScheduleCadences(_job: PgBoss.Job) {
     console.log("[scheduler] tick");
 
-    // 1. Enroll eligible groups in each active campaign
-    const activeCampaigns = await db.select().from(cadences).where(eq(cadences.isActive, true));
+    // 1. Load active campaigns only
+    const activeCampaigns = await db
+      .select()
+      .from(cadences)
+      .where(eq(cadences.isActive, true));
+
     console.log(`[scheduler] ${activeCampaigns.length} active campaigns`);
 
     for (const campaign of activeCampaigns) {
       try {
-        const allowedStatuses = Array.isArray(campaign.allowedStatuses)
-          ? (campaign.allowedStatuses as string[])
-          : [];
-        if (allowedStatuses.length === 0) continue;
+        // ---- LIMIT ENFORCEMENT (per-campaign) ----
 
-        // Daily limit gate: count sends logged today for this campaign
+        // Daily limit
         if (campaign.dailyLimit && campaign.dailyLimit > 0) {
           const sinceMidnight = new Date();
           sinceMidnight.setHours(0, 0, 0, 0);
-          const [{ c: sentToday = 0 } = { c: 0 }] = (await db
-            .select({ c: sql<number>`count(*)::int` })
-            .from(auditLogs)
-            .where(
-              and(
-                eq(auditLogs.action, "cadence_step_executed"),
-                gte(auditLogs.createdAt, sinceMidnight)
-              )
-            )) as Array<{ c: number }>;
-          if (Number(sentToday) >= campaign.dailyLimit) {
+          const dailyCount = await countCampaignSends(campaign.id, sinceMidnight);
+          if (dailyCount >= campaign.dailyLimit) {
             console.log(
-              `[scheduler] campaign ${campaign.name} reached daily_limit ${campaign.dailyLimit}, skipping enrollment`
+              `[scheduler] "${campaign.name}" daily_limit ${campaign.dailyLimit} reached (${dailyCount} sent today), skipping`
             );
             continue;
           }
         }
 
-        // Filter criteria
-        const filter = (campaign.filterJson ?? {}) as Record<string, unknown>;
-        const renewalWithinDays =
-          typeof filter.renewalWithinDays === "number" ? (filter.renewalWithinDays as number) : null;
-        const noReplyDays =
-          typeof filter.noReplyDays === "number" ? (filter.noReplyDays as number) : null;
-
-        // Pull candidate companies: allowed status, not DNC
-        const candidates = await db
-          .select()
-          .from(companies)
-          .where(
-            and(
-              inArray(companies.status, allowedStatuses),
-              eq(companies.doNotContact, false)
-            )
-          )
-          .limit(200);
-
-        // Post-filter in JS for renewal window + no-reply window (keeps SQL simple)
-        const eligible = candidates.filter((c) => {
-          if (renewalWithinDays !== null && c.renewalMonth !== null) {
-            const nowMonth = new Date().getMonth() + 1;
-            let diff = c.renewalMonth - nowMonth;
-            if (diff < 0) diff += 12;
-            const days = diff * 30; // rough
-            if (days > renewalWithinDays) return false;
+        // Hourly limit
+        if (campaign.hourlyLimit && campaign.hourlyLimit > 0) {
+          const oneHourAgo = new Date(Date.now() - 60 * 60 * 1000);
+          const hourlyCount = await countCampaignSends(campaign.id, oneHourAgo);
+          if (hourlyCount >= campaign.hourlyLimit) {
+            console.log(
+              `[scheduler] "${campaign.name}" hourly_limit ${campaign.hourlyLimit} reached (${hourlyCount} in last hour), skipping`
+            );
+            continue;
           }
-          if (noReplyDays !== null && c.lastActivityAt) {
-            if (c.lastActivityAt > daysAgo(noReplyDays)) return false;
+        }
+
+        // Minimum delay between sends
+        if (campaign.minimumDelaySeconds && campaign.minimumDelaySeconds > 0) {
+          const lastSendAt = await lastCampaignSendAt(campaign.id);
+          if (lastSendAt) {
+            const secondsSince = Math.floor((Date.now() - lastSendAt.getTime()) / 1000);
+            if (secondsSince < campaign.minimumDelaySeconds) {
+              console.log(
+                `[scheduler] "${campaign.name}" minimum_delay_seconds ${campaign.minimumDelaySeconds} not elapsed (${secondsSince}s since last), skipping`
+              );
+              continue;
+            }
           }
-          return true;
+        }
+
+        // ---- ELIGIBILITY ----
+
+        const allowedStatuses = Array.isArray(campaign.allowedStatuses)
+          ? (campaign.allowedStatuses as string[])
+          : [];
+        if (allowedStatuses.length === 0) {
+          console.log(`[scheduler] "${campaign.name}" has no allowed statuses, skipping`);
+          continue;
+        }
+
+        const filter = (campaign.filterJson ?? {}) as CampaignFilter;
+        const eligible = await resolveEligibleGroups({
+          allowedStatuses,
+          filter,
+          limit: 200,
         });
 
-        if (eligible.length === 0) continue;
+        if (eligible.length === 0) {
+          // Still update last_run_at to signal the scheduler did tick for this campaign
+          await db
+            .update(cadences)
+            .set({ lastRunAt: new Date() })
+            .where(eq(cadences.id, campaign.id));
+          continue;
+        }
 
-        // Find which are already enrolled (active) in this campaign
-        const eligibleIds = eligible.map((c) => c.id);
+        // Already-enrolled set — exclude active / replied / completed so we
+        // don't re-enroll groups the campaign already owns
+        const eligibleIds = eligible.map((e) => e.company.id);
         const alreadyEnrolled = await db
           .select({ companyId: enrollments.companyId })
           .from(enrollments)
@@ -104,36 +120,31 @@ export function makeScheduleCadencesHandler(boss: PgBoss) {
             )
           );
         const enrolledSet = new Set(alreadyEnrolled.map((e) => e.companyId));
-        const toEnroll = eligible.filter((c) => !enrolledSet.has(c.id));
+        const toEnroll = eligible.filter((e) => !enrolledSet.has(e.company.id));
 
-        // Enroll — pick primary contact, or fall back to any contact
-        for (const company of toEnroll.slice(0, 25)) {
-          let contactId = company.primaryContactId;
-          if (!contactId) {
-            const [firstContact] = await db
-              .select()
-              .from(contacts)
-              .where(eq(contacts.companyId, company.id))
-              .orderBy(contacts.createdAt)
-              .limit(1);
-            if (!firstContact) continue;
-            contactId = firstContact.id;
-          }
-
+        // Enroll — capped to MAX_ENROLLMENTS_PER_CAMPAIGN_PER_TICK
+        let enrolledThisTick = 0;
+        for (const { company, primaryContact } of toEnroll.slice(
+          0,
+          MAX_ENROLLMENTS_PER_CAMPAIGN_PER_TICK
+        )) {
           await db.insert(enrollments).values({
             cadenceId: campaign.id,
             companyId: company.id,
-            contactId,
+            contactId: primaryContact!.id,
             currentStep: 1,
             status: "active",
-            nextStepAt: new Date(), // due immediately
+            nextStepAt: new Date(), // due immediately; execute-step respects limits
           });
+          enrolledThisTick++;
+        }
+
+        if (enrolledThisTick > 0) {
           console.log(
-            `[scheduler] enrolled ${company.companyName ?? company.domain} in campaign ${campaign.name}`
+            `[scheduler] "${campaign.name}" enrolled ${enrolledThisTick} new group(s)`
           );
         }
 
-        // Mark campaign last_run_at
         await db
           .update(cadences)
           .set({ lastRunAt: new Date() })
@@ -143,16 +154,58 @@ export function makeScheduleCadencesHandler(boss: PgBoss) {
       }
     }
 
-    // 2. Queue due enrollments for execution
+    // 2. Queue due enrollments for execution (only from ACTIVE campaigns)
     const dueEnrollments = await getDueEnrollments(50);
     if (dueEnrollments.length === 0) {
       console.log("[scheduler] no due enrollments");
       return;
     }
 
-    console.log(`[scheduler] queueing ${dueEnrollments.length} due enrollments`);
-    for (const enrollment of dueEnrollments) {
+    // Filter out enrollments whose campaign is not active (safety double-check)
+    const activeCampaignIds = new Set(activeCampaigns.map((c) => c.id));
+    const queuable = dueEnrollments.filter((e) => activeCampaignIds.has(e.cadenceId));
+    if (queuable.length < dueEnrollments.length) {
+      console.log(
+        `[scheduler] filtered ${dueEnrollments.length - queuable.length} due enrollment(s) from paused campaigns`
+      );
+    }
+
+    console.log(`[scheduler] queueing ${queuable.length} due enrollment(s)`);
+    for (const enrollment of queuable) {
       await boss.send("execute-cadence-step", { enrollmentId: enrollment.id });
     }
   };
+}
+
+// ---- helpers ----
+
+async function countCampaignSends(campaignId: string, since: Date): Promise<number> {
+  const rows = (await db
+    .select({ c: sql<number>`count(*)::int` })
+    .from(auditLogs)
+    .where(
+      and(
+        eq(auditLogs.action, "cadence_step_executed"),
+        eq(auditLogs.entityType, "campaign"),
+        eq(auditLogs.entityId, campaignId),
+        gte(auditLogs.createdAt, since)
+      )
+    )) as Array<{ c: number }>;
+  return Number(rows[0]?.c ?? 0);
+}
+
+async function lastCampaignSendAt(campaignId: string): Promise<Date | null> {
+  const rows = await db
+    .select({ createdAt: auditLogs.createdAt })
+    .from(auditLogs)
+    .where(
+      and(
+        eq(auditLogs.action, "cadence_step_executed"),
+        eq(auditLogs.entityType, "campaign"),
+        eq(auditLogs.entityId, campaignId)
+      )
+    )
+    .orderBy(desc(auditLogs.createdAt))
+    .limit(1);
+  return rows[0]?.createdAt ?? null;
 }

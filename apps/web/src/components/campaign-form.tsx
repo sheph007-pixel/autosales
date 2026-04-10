@@ -1,7 +1,11 @@
 "use client";
 
-import { useState } from "react";
-import { createCampaignAction } from "@/lib/actions/campaigns";
+import { useState, useEffect, useTransition } from "react";
+import {
+  createCampaignAction,
+  previewCampaignTargetingAction,
+  type CampaignPreviewResult,
+} from "@/lib/actions/campaigns";
 import { useRouter } from "next/navigation";
 import { COMPANY_STATUSES, STATUS_LABELS, type CompanyStatus } from "@autosales/core";
 
@@ -27,7 +31,30 @@ export function CreateCampaignForm() {
     { delayDays: 7, templatePrompt: "Final nudge — surface timing / renewal angle if known, keep it brief." },
   ]);
   const [saving, setSaving] = useState(false);
+  const [preview, setPreview] = useState<CampaignPreviewResult | null>(null);
+  const [previewing, startPreview] = useTransition();
   const router = useRouter();
+
+  // Debounced preview — refresh whenever targeting changes
+  useEffect(() => {
+    const handle = setTimeout(() => {
+      const filter: Record<string, unknown> = {};
+      if (renewalWithinDays) filter.renewalWithinDays = Number(renewalWithinDays);
+      if (noReplyDays) filter.noReplyDays = Number(noReplyDays);
+      startPreview(async () => {
+        try {
+          const result = await previewCampaignTargetingAction({
+            allowedStatuses,
+            filterJson: filter,
+          });
+          setPreview(result);
+        } catch {
+          setPreview(null);
+        }
+      });
+    }, 300);
+    return () => clearTimeout(handle);
+  }, [allowedStatuses, renewalWithinDays, noReplyDays]);
 
   function toggleStatus(s: CompanyStatus) {
     setAllowedStatuses((cur) => (cur.includes(s) ? cur.filter((x) => x !== s) : [...cur, s]));
@@ -179,6 +206,39 @@ export function CreateCampaignForm() {
         </div>
       </div>
 
+      {/* Live preview of matched groups — updates as targeting changes */}
+      <div className="border rounded p-3 bg-muted/30">
+        <div className="flex items-center justify-between mb-2">
+          <span className="text-sm font-medium">Matches right now</span>
+          <span className="text-xs text-muted-foreground">
+            {previewing ? "Checking…" : preview ? `${preview.matched} group(s)` : ""}
+          </span>
+        </div>
+        {preview && preview.sample.length > 0 ? (
+          <div className="space-y-1">
+            {preview.sample.slice(0, 5).map((s) => (
+              <div key={s.companyId} className="text-xs">
+                <span className="font-medium">{s.companyName || s.domain}</span>
+                <span className="text-muted-foreground">
+                  {" "}
+                  → {s.primaryContactName} &lt;{s.primaryContactEmail}&gt;
+                </span>
+              </div>
+            ))}
+            {preview.matched > preview.sample.length && (
+              <div className="text-xs text-muted-foreground italic">
+                + {preview.matched - preview.sample.length} more
+              </div>
+            )}
+          </div>
+        ) : preview && preview.matched === 0 ? (
+          <p className="text-xs text-muted-foreground italic">
+            No groups match these filters. New campaigns start paused — you can still save and
+            adjust later.
+          </p>
+        ) : null}
+      </div>
+
       <div className="grid grid-cols-3 gap-3">
         <div>
           <label className="block text-xs text-muted-foreground mb-1">Daily limit</label>
@@ -260,13 +320,18 @@ export function CreateCampaignForm() {
         </div>
       </div>
 
-      <button
-        type="submit"
-        disabled={saving || !name}
-        className="w-full py-2 px-4 bg-primary text-primary-foreground rounded text-sm font-medium hover:opacity-90 disabled:opacity-50"
-      >
-        {saving ? "Creating…" : "Create campaign"}
-      </button>
+      <div>
+        <button
+          type="submit"
+          disabled={saving || !name}
+          className="w-full py-2 px-4 bg-primary text-primary-foreground rounded text-sm font-medium hover:opacity-90 disabled:opacity-50"
+        >
+          {saving ? "Creating…" : "Create campaign (paused)"}
+        </button>
+        <p className="text-xs text-muted-foreground mt-2 text-center">
+          Campaigns start paused. Review the target list on the detail page, then press Start.
+        </p>
+      </div>
     </form>
   );
 }

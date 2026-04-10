@@ -1,5 +1,5 @@
 import PgBoss from "pg-boss";
-import { handleSyncMailbox } from "./jobs/sync-mailbox";
+import { makeSyncMailboxHandler } from "./jobs/sync-mailbox";
 import { handleClassifyMessage } from "./jobs/classify-message";
 import { handleRefreshDomainMemory } from "./jobs/refresh-domain-memory";
 import { makeExecuteCadenceStepHandler } from "./jobs/execute-cadence-step";
@@ -40,6 +40,7 @@ async function main() {
   console.log("pg-boss started.");
 
   // Register job handlers
+  const handleSyncMailbox = makeSyncMailboxHandler(boss);
   const handleExecuteCadenceStep = makeExecuteCadenceStepHandler(boss);
   const handleScheduleCadences = makeScheduleCadencesHandler(boss);
 

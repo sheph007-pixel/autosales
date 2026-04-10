@@ -1,8 +1,9 @@
-import { db, ensureTables, cadences, cadenceSteps, enrollments, companies, contacts } from "@autosales/db";
-import { eq, desc, sql } from "drizzle-orm";
+import { db, ensureTables, cadences, cadenceSteps, enrollments, companies, contacts, auditLogs } from "@autosales/db";
+import { eq, desc, sql, and } from "drizzle-orm";
 import Link from "next/link";
 import { notFound } from "next/navigation";
 import { STATUS_LABELS, type CompanyStatus } from "@autosales/core";
+import { resolveEligibleGroups, type CampaignFilter } from "@autosales/core/services/campaign-targeting.service";
 import { CampaignControls } from "@/components/campaign-controls";
 
 export const dynamic = "force-dynamic";
@@ -20,11 +21,22 @@ interface EnrollmentRow {
   startedAt: Date;
 }
 
+interface PreviewSample {
+  companyId: string;
+  companyName: string | null;
+  domain: string;
+  primaryContactName: string;
+  primaryContactEmail: string;
+}
+
 export default async function CampaignDetailPage({ params }: { params: { id: string } }) {
   let campaign: typeof cadences.$inferSelect | null = null;
   let steps: Array<typeof cadenceSteps.$inferSelect> = [];
   let enrolled: EnrollmentRow[] = [];
-  let counts = { active: 0, replied: 0, paused: 0, completed: 0, total: 0 };
+  const counts = { active: 0, replied: 0, paused: 0, completed: 0, total: 0 };
+  let emailsSent = 0;
+  let matchedNow = 0;
+  let preview: PreviewSample[] = [];
   let errorMessage: string | null = null;
 
   try {
@@ -77,6 +89,42 @@ export default async function CampaignDetailPage({ params }: { params: { id: str
       else if (row.status === "paused") counts.paused = n;
       else if (row.status === "completed") counts.completed = n;
     }
+
+    // Emails sent — count cadence_step_executed audit logs for this campaign
+    const emailsSentRows = (await db
+      .select({ c: sql<number>`count(*)::int` })
+      .from(auditLogs)
+      .where(
+        and(
+          eq(auditLogs.action, "cadence_step_executed"),
+          eq(auditLogs.entityType, "campaign"),
+          eq(auditLogs.entityId, params.id)
+        )
+      )) as Array<{ c: number }>;
+    emailsSent = Number(emailsSentRows[0]?.c ?? 0);
+
+    // Matched right now — same eligibility logic the scheduler uses
+    try {
+      const allowedStatuses = Array.isArray(campaign.allowedStatuses)
+        ? (campaign.allowedStatuses as string[])
+        : [];
+      const filter = (campaign.filterJson ?? {}) as CampaignFilter;
+      const eligible = await resolveEligibleGroups({
+        allowedStatuses,
+        filter,
+        limit: 500,
+      });
+      matchedNow = eligible.length;
+      preview = eligible.slice(0, 10).map((e) => ({
+        companyId: e.company.id,
+        companyName: e.company.companyName,
+        domain: e.company.domain,
+        primaryContactName: e.primaryContact!.name,
+        primaryContactEmail: e.primaryContact!.email,
+      }));
+    } catch (err) {
+      console.error("Campaign preview failed:", err);
+    }
   } catch (err) {
     errorMessage = err instanceof Error ? err.message : String(err);
     console.error("Campaign detail page error:", err);
@@ -120,24 +168,73 @@ export default async function CampaignDetailPage({ params }: { params: { id: str
         </div>
       </div>
 
-      <div className="grid grid-cols-4 gap-3 mb-6">
+      <div className="grid grid-cols-3 md:grid-cols-6 gap-3 mb-6">
+        <div className="bg-card border rounded p-3">
+          <div className="text-xs text-muted-foreground">Matches now</div>
+          <div className="text-xl font-bold">{matchedNow}</div>
+        </div>
+        <div className="bg-card border rounded p-3">
+          <div className="text-xs text-muted-foreground">Enrolled</div>
+          <div className="text-xl font-bold">{counts.total}</div>
+        </div>
         <div className="bg-card border rounded p-3">
           <div className="text-xs text-muted-foreground">Active</div>
           <div className="text-xl font-bold">{counts.active}</div>
         </div>
         <div className="bg-card border rounded p-3">
-          <div className="text-xs text-muted-foreground">Replied</div>
+          <div className="text-xs text-muted-foreground">Emails sent</div>
+          <div className="text-xl font-bold">{emailsSent}</div>
+        </div>
+        <div className="bg-card border rounded p-3">
+          <div className="text-xs text-muted-foreground">Replies</div>
           <div className="text-xl font-bold">{counts.replied}</div>
         </div>
         <div className="bg-card border rounded p-3">
           <div className="text-xs text-muted-foreground">Completed</div>
           <div className="text-xl font-bold">{counts.completed}</div>
         </div>
-        <div className="bg-card border rounded p-3">
-          <div className="text-xs text-muted-foreground">Total enrolled</div>
-          <div className="text-xl font-bold">{counts.total}</div>
-        </div>
       </div>
+
+      {/* Target preview — what this campaign would hit on the next tick */}
+      <section className="bg-card border rounded-lg p-4 mb-6">
+        <div className="flex items-center justify-between mb-3">
+          <h2 className="font-semibold">Target preview</h2>
+          <span className="text-xs text-muted-foreground">
+            {matchedNow === 0
+              ? "No groups match current filters"
+              : `${matchedNow} group(s) eligible right now`}
+          </span>
+        </div>
+        {!campaign.isActive && matchedNow > 0 && (
+          <div className="mb-3 p-2 bg-amber-50 border border-amber-200 rounded text-xs text-amber-900">
+            Campaign is <strong>paused</strong>. No emails will be sent until you press Start.
+          </div>
+        )}
+        {preview.length === 0 ? (
+          <p className="text-sm text-muted-foreground italic">Nothing to preview.</p>
+        ) : (
+          <div className="divide-y">
+            {preview.map((p) => (
+              <div key={p.companyId} className="py-2 text-sm flex items-center justify-between">
+                <div>
+                  <Link href={`/groups/${p.companyId}`} className="font-medium text-primary hover:underline">
+                    {p.companyName || p.domain}
+                  </Link>
+                  <span className="text-xs text-muted-foreground ml-2">{p.domain}</span>
+                </div>
+                <div className="text-xs text-muted-foreground">
+                  {p.primaryContactName} &lt;{p.primaryContactEmail}&gt;
+                </div>
+              </div>
+            ))}
+            {matchedNow > preview.length && (
+              <div className="py-2 text-xs text-muted-foreground italic">
+                + {matchedNow - preview.length} more
+              </div>
+            )}
+          </div>
+        )}
+      </section>
 
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6 mb-6">
         <div className="lg:col-span-2 space-y-4">
@@ -220,21 +317,28 @@ export default async function CampaignDetailPage({ params }: { params: { id: str
             </div>
           </section>
           <section className="bg-card border rounded-lg p-4">
-            <h2 className="font-semibold mb-2">Last run</h2>
-            <p className="text-sm text-muted-foreground">
-              {campaign.lastRunAt ? new Date(campaign.lastRunAt).toLocaleString() : "Never run."}
-            </p>
+            <h2 className="font-semibold mb-2">Schedule</h2>
+            <div className="text-sm space-y-1">
+              <div>
+                <span className="text-muted-foreground">Last run: </span>
+                {campaign.lastRunAt ? new Date(campaign.lastRunAt).toLocaleString() : "Never"}
+              </div>
+              <div>
+                <span className="text-muted-foreground">Next run: </span>
+                {campaign.isActive ? "Every 15 minutes (scheduler tick)" : "Paused"}
+              </div>
+            </div>
           </section>
         </div>
       </div>
 
       <section className="bg-card border rounded-lg overflow-hidden">
         <div className="p-3 border-b bg-muted">
-          <h2 className="font-semibold text-sm">Enrolled groups ({enrolled.length})</h2>
+          <h2 className="font-semibold text-sm">Groups in this campaign ({enrolled.length})</h2>
         </div>
         {enrolled.length === 0 ? (
           <p className="p-4 text-sm text-muted-foreground">
-            No groups enrolled yet. The automation engine will pick eligible groups based on the targeting above.
+            No groups in this campaign yet. Once you Start it, the scheduler will pick up eligible groups on the next tick.
           </p>
         ) : (
           <table className="w-full text-sm">
@@ -242,8 +346,8 @@ export default async function CampaignDetailPage({ params }: { params: { id: str
               <tr>
                 <th className="text-left p-3 font-medium">Group</th>
                 <th className="text-left p-3 font-medium">Contact</th>
-                <th className="text-left p-3 font-medium">Step</th>
-                <th className="text-left p-3 font-medium">Status</th>
+                <th className="text-left p-3 font-medium">On step</th>
+                <th className="text-left p-3 font-medium">State</th>
                 <th className="text-left p-3 font-medium">Next action</th>
               </tr>
             </thead>

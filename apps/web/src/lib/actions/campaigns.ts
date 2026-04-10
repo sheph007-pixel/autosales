@@ -7,9 +7,11 @@ import {
   deleteCadence,
   type CampaignInput,
 } from "@autosales/core/services/cadence.service";
+import { resolveEligibleGroups } from "@autosales/core/services/campaign-targeting.service";
 import { logAudit } from "@autosales/core/services/audit.service";
 import { revalidatePath } from "next/cache";
 import { COMPANY_STATUSES, type CompanyStatus } from "@autosales/core";
+import { ensureTables } from "@autosales/db";
 
 function sanitizeAllowedStatuses(raw: unknown): string[] {
   if (!Array.isArray(raw)) return ["lead"];
@@ -29,7 +31,6 @@ export async function createCampaignAction(data: {
   dailyLimit?: number | null;
   hourlyLimit?: number | null;
   minimumDelaySeconds?: number | null;
-  triggerType?: string;
   steps: { delayDays: number; templatePrompt: string }[];
 }) {
   const input: CampaignInput = {
@@ -42,7 +43,7 @@ export async function createCampaignAction(data: {
     dailyLimit: data.dailyLimit ?? null,
     hourlyLimit: data.hourlyLimit ?? null,
     minimumDelaySeconds: data.minimumDelaySeconds ?? null,
-    triggerType: data.triggerType ?? "manual",
+    // triggerType is internal-only ("manual" default); not exposed in UI
     steps: data.steps,
   };
 
@@ -106,6 +107,56 @@ export async function setCampaignActiveAction(id: string, isActive: boolean) {
   revalidatePath("/campaigns");
   revalidatePath(`/campaigns/${id}`);
   return updated;
+}
+
+export interface CampaignPreviewResult {
+  matched: number;
+  sample: Array<{
+    companyId: string;
+    companyName: string | null;
+    domain: string;
+    status: string;
+    primaryContactName: string;
+    primaryContactEmail: string;
+  }>;
+}
+
+/**
+ * Dry-run: compute which Groups a campaign would target RIGHT NOW given
+ * the supplied status + filter settings. Returns a matched count and a
+ * sample of up to 10 groups with their resolved primary contact.
+ *
+ * This reuses the exact same eligibility logic the scheduler uses, so
+ * what the user sees here is what would actually be enrolled.
+ */
+export async function previewCampaignTargetingAction(input: {
+  allowedStatuses?: string[];
+  filterJson?: Record<string, unknown>;
+}): Promise<CampaignPreviewResult> {
+  await ensureTables();
+  const allowedStatuses = sanitizeAllowedStatuses(input.allowedStatuses);
+  const filter = (input.filterJson ?? {}) as {
+    renewalWithinDays?: number;
+    noReplyDays?: number;
+  };
+
+  const eligible = await resolveEligibleGroups({
+    allowedStatuses,
+    filter,
+    limit: 500,
+  });
+
+  return {
+    matched: eligible.length,
+    sample: eligible.slice(0, 10).map((e) => ({
+      companyId: e.company.id,
+      companyName: e.company.companyName,
+      domain: e.company.domain,
+      status: e.company.status,
+      primaryContactName: e.primaryContact!.name,
+      primaryContactEmail: e.primaryContact!.email,
+    })),
+  };
 }
 
 export async function deleteCampaignAction(id: string) {
