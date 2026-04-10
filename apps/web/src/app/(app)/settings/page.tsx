@@ -8,6 +8,28 @@ import { ensureTables } from "@autosales/db";
 export const dynamic = "force-dynamic";
 
 export default async function SettingsPage() {
+  try {
+    return await renderSettingsPage();
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    const stack = err instanceof Error && err.stack ? err.stack : "";
+    console.error("Settings page fatal error:", err);
+    return (
+      <div>
+        <h1 className="text-2xl font-bold mb-4 text-red-900">Settings — render failed</h1>
+        <div className="p-4 bg-red-50 border border-red-200 rounded">
+          <p className="text-sm font-medium text-red-900 mb-2">Fatal error (caught by outer guard):</p>
+          <pre className="text-xs font-mono whitespace-pre-wrap break-all text-red-800">
+{message}
+{stack ? "\n\n" + stack : ""}
+          </pre>
+        </div>
+      </div>
+    );
+  }
+}
+
+async function renderSettingsPage() {
   const session = await getSession();
   const outlookStatus = await getOutlookConnectionStatus();
 

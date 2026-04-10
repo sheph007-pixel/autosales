@@ -38,11 +38,39 @@ function toRows<T>(result: unknown): T[] {
   return [];
 }
 
-export default async function GroupsPage({
-  searchParams,
-}: {
+interface GroupsPageProps {
   searchParams: { search?: string; status?: string; sort?: string; dir?: string; page?: string };
-}) {
+}
+
+// Outer wrapper: catches ANY server-side error (including render-phase errors)
+// and renders a full diagnostic dump so we can see what's actually failing in
+// production. Without this wrapper, Next.js masks the real error text and only
+// shows a digest in the error boundary.
+export default async function GroupsPage(props: GroupsPageProps) {
+  try {
+    return await renderGroupsPage(props);
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    const stack = err instanceof Error && err.stack ? err.stack : "";
+    console.error("Groups page fatal error:", err);
+    return (
+      <div>
+        <h1 className="text-2xl font-bold mb-4 text-red-900">Groups — render failed</h1>
+        <div className="p-4 bg-red-50 border border-red-200 rounded">
+          <p className="text-sm font-medium text-red-900 mb-2">Fatal error (caught by outer guard):</p>
+          <pre className="text-xs font-mono whitespace-pre-wrap break-all text-red-800">
+{message}
+{stack ? "\n\n" + stack : ""}
+          </pre>
+        </div>
+      </div>
+    );
+  }
+}
+
+async function renderGroupsPage({
+  searchParams,
+}: GroupsPageProps) {
   const page = Number(searchParams.page) || 1;
   const limit = 50;
   const offset = (page - 1) * limit;

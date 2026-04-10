@@ -48,7 +48,29 @@ interface MessageRow {
   received_at: string;
 }
 
-export default async function GroupDetailPage({ params }: { params: { id: string } }) {
+export default async function GroupDetailPage(props: { params: { id: string } }) {
+  try {
+    return await renderGroupDetailPage(props);
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    const stack = err instanceof Error && err.stack ? err.stack : "";
+    console.error("Group detail page fatal error:", err);
+    return (
+      <div>
+        <h1 className="text-2xl font-bold mb-4 text-red-900">Group detail — render failed</h1>
+        <div className="p-4 bg-red-50 border border-red-200 rounded">
+          <p className="text-sm font-medium text-red-900 mb-2">Fatal error (caught by outer guard):</p>
+          <pre className="text-xs font-mono whitespace-pre-wrap break-all text-red-800">
+{message}
+{stack ? "\n\n" + stack : ""}
+          </pre>
+        </div>
+      </div>
+    );
+  }
+}
+
+async function renderGroupDetailPage({ params }: { params: { id: string } }) {
   let group: GroupDetail | null = null;
   let contacts: ContactRow[] = [];
   let messages: MessageRow[] = [];

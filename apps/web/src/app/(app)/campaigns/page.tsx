@@ -9,6 +9,28 @@ export const dynamic = "force-dynamic";
 type CampaignRow = typeof cadences.$inferSelect;
 
 export default async function CampaignsPage() {
+  try {
+    return await renderCampaignsPage();
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    const stack = err instanceof Error && err.stack ? err.stack : "";
+    console.error("Campaigns page fatal error:", err);
+    return (
+      <div>
+        <h1 className="text-2xl font-bold mb-4 text-red-900">Campaigns — render failed</h1>
+        <div className="p-4 bg-red-50 border border-red-200 rounded">
+          <p className="text-sm font-medium text-red-900 mb-2">Fatal error (caught by outer guard):</p>
+          <pre className="text-xs font-mono whitespace-pre-wrap break-all text-red-800">
+{message}
+{stack ? "\n\n" + stack : ""}
+          </pre>
+        </div>
+      </div>
+    );
+  }
+}
+
+async function renderCampaignsPage() {
   let campaigns: CampaignRow[] = [];
   const enrollmentCounts: Record<string, { active: number; total: number }> = {};
   let errorMessage: string | null = null;
