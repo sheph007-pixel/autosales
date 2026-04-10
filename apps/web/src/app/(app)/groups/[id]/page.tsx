@@ -1,4 +1,4 @@
-import { db } from "@autosales/db";
+import { db, ensureTables } from "@autosales/db";
 import { sql } from "drizzle-orm";
 import Link from "next/link";
 import { notFound } from "next/navigation";
@@ -47,6 +47,8 @@ export default async function GroupDetailPage({ params }: { params: { id: string
   let tasks: Array<{ id: string; description: string; type: string; status: string; due_at: string | null }> = [];
 
   try {
+    await ensureTables();
+
     const groupRows = await db.execute(sql`
       SELECT id, domain, company_name, status, renewal_month, has_group_health_plan,
              next_action_at, last_activity_at, do_not_contact, summary, primary_contact_id

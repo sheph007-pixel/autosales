@@ -1,6 +1,6 @@
 "use server";
 
-import { db } from "@autosales/db";
+import { db, ensureTables } from "@autosales/db";
 import { sql } from "drizzle-orm";
 import { revalidatePath } from "next/cache";
 import { COMPANY_STATUSES, type CompanyStatus } from "@autosales/core";
@@ -15,6 +15,8 @@ export async function updateGroupAction(
     doNotContact?: boolean;
   }
 ) {
+  await ensureTables();
+
   // Validate status
   if (updates.status && !COMPANY_STATUSES.includes(updates.status as CompanyStatus)) {
     throw new Error(`Invalid status: ${updates.status}`);

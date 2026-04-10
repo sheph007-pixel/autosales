@@ -1,4 +1,4 @@
-import { db, emailMessages, classifications, companies, contacts } from "@autosales/db";
+import { db, emailMessages, classifications, companies, contacts, ensureTables } from "@autosales/db";
 import { desc, eq, isNull, sql } from "drizzle-orm";
 import Link from "next/link";
 
@@ -21,6 +21,7 @@ export default async function InboxPage() {
   let messages: InboxMessage[] = [];
 
   try {
+    await ensureTables();
     const result = await db.execute(sql`
       SELECT
         em.id,

@@ -1,5 +1,5 @@
 import { listCadences, getCadence } from "@autosales/core/services/cadence.service";
-import { db, enrollments } from "@autosales/db";
+import { db, enrollments, ensureTables } from "@autosales/db";
 import { eq, sql } from "drizzle-orm";
 import { CreateCadenceForm } from "@/components/cadence-form";
 
@@ -10,6 +10,7 @@ export default async function CadencesPage() {
   let enrollmentCounts: Record<string, number> = {};
 
   try {
+    await ensureTables();
     cadenceList = await listCadences();
     if (cadenceList.length > 0) {
       const counts = await db

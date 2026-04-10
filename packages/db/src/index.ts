@@ -218,24 +218,17 @@ CREATE TABLE job_runs (
 );
 `;
 
-// Idempotent migration: adds primary_contact_id, remaps statuses, backfills.
-// Safe to run on every startup — all statements use IF NOT EXISTS or are idempotent.
-const GROUPS_MIGRATION_SQL = `
-ALTER TABLE companies ADD COLUMN IF NOT EXISTS primary_contact_id UUID;
-ALTER TABLE companies ALTER COLUMN status SET DEFAULT 'lead';
-UPDATE companies SET status = 'current_client' WHERE status = 'client';
-UPDATE companies SET status = 'old_client' WHERE status = 'dormant';
-UPDATE companies SET status = 'lead' WHERE status IN ('prospect','active_opportunity','quoted');
-UPDATE companies SET status = 'not_qualified' WHERE status = 'suppressed';
-UPDATE companies c
-  SET primary_contact_id = (
-    SELECT id FROM contacts
-    WHERE company_id = c.id
-    ORDER BY created_at ASC
-    LIMIT 1
-  )
-  WHERE primary_contact_id IS NULL;
-`;
+// Idempotent migration statements: adds primary_contact_id, remaps statuses, backfills.
+// Each statement is run individually to avoid multi-statement issues with postgres.js.
+const GROUPS_MIGRATION_STATEMENTS = [
+  `ALTER TABLE companies ADD COLUMN IF NOT EXISTS primary_contact_id UUID`,
+  `ALTER TABLE companies ALTER COLUMN status SET DEFAULT 'lead'`,
+  `UPDATE companies SET status = 'current_client' WHERE status = 'client'`,
+  `UPDATE companies SET status = 'old_client' WHERE status = 'dormant'`,
+  `UPDATE companies SET status = 'lead' WHERE status IN ('prospect','active_opportunity','quoted')`,
+  `UPDATE companies SET status = 'not_qualified' WHERE status = 'suppressed'`,
+  `UPDATE companies c SET primary_contact_id = (SELECT id FROM contacts WHERE company_id = c.id ORDER BY created_at ASC LIMIT 1) WHERE primary_contact_id IS NULL`,
+];
 
 export async function ensureTables() {
   if (_tablesReady) return;
@@ -261,10 +254,12 @@ export async function ensureTables() {
     }
 
     // Always run idempotent migration for Groups refactor (v3 → Groups)
-    try {
-      await database.execute(sql.raw(GROUPS_MIGRATION_SQL));
-    } catch (err) {
-      console.error("Groups migration failed:", err);
+    for (const stmt of GROUPS_MIGRATION_STATEMENTS) {
+      try {
+        await database.execute(sql.raw(stmt));
+      } catch (err) {
+        console.error("Groups migration statement failed:", stmt, err);
+      }
     }
 
     _tablesReady = true;

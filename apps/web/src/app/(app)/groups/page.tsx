@@ -1,4 +1,4 @@
-import { db } from "@autosales/db";
+import { db, ensureTables } from "@autosales/db";
 import { sql } from "drizzle-orm";
 import Link from "next/link";
 import { COMPANY_STATUSES, STATUS_LABELS, STATUS_COLORS, getMonthName, type CompanyStatus } from "@autosales/core";
@@ -45,6 +45,9 @@ export default async function GroupsPage({
   let stats = { lead: 0, current_client: 0, old_client: 0, not_qualified: 0 };
 
   try {
+    // Ensure schema is migrated before querying
+    await ensureTables();
+
     const conditions: string[] = [];
 
     if (searchParams.status && COMPANY_STATUSES.includes(searchParams.status as CompanyStatus)) {

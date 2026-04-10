@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { exchangeCodeForTokens, GraphClient } from "@autosales/mail";
-import { db, oauthAccounts } from "@autosales/db";
+import { db, oauthAccounts, ensureTables } from "@autosales/db";
 import { eq, sql } from "drizzle-orm";
 import { createSessionToken, setSessionCookie, isAllowedEmail } from "@/lib/auth";
 
@@ -32,6 +32,8 @@ export async function GET(request: NextRequest) {
   }
 
   try {
+    await ensureTables();
+
     // Ensure oauth_accounts table exists before trying to use it
     await db.execute(sql`
       CREATE TABLE IF NOT EXISTS oauth_accounts (
