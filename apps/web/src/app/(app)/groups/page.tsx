@@ -309,7 +309,6 @@ async function renderGroupsPage({
                         href={`https://${group.domain}`}
                         target="_blank"
                         rel="noopener noreferrer"
-                        onClick={(e) => e.stopPropagation()}
                         className="text-muted-foreground hover:underline text-xs"
                       >
                         {group.domain}
