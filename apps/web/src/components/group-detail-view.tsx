@@ -1,7 +1,6 @@
 "use client";
 
-import { useState, useCallback } from "react";
-import { useRouter } from "next/navigation";
+import { useState } from "react";
 import { cn } from "@/components/ui/utils";
 
 interface Contact {
@@ -36,30 +35,8 @@ interface GroupDetailViewProps {
 }
 
 export function GroupDetailView({ group, contacts, messages }: GroupDetailViewProps) {
-  const router = useRouter();
   const [selectedContactId, setSelectedContactId] = useState<string | null>(null);
   const [expandedMessageId, setExpandedMessageId] = useState<string | null>(null);
-  const [syncing, setSyncing] = useState(false);
-  const [syncResult, setSyncResult] = useState<string | null>(null);
-
-  const handleSync = useCallback(async () => {
-    setSyncing(true);
-    setSyncResult(null);
-    try {
-      const res = await fetch("/api/sync/trigger", { method: "POST" });
-      const data = await res.json();
-      if (data.error) {
-        setSyncResult(`Error: ${data.error}`);
-      } else {
-        setSyncResult(`Fetched ${data.totalFetched}, matched ${data.processed}, skipped ${data.skippedUnknown}`);
-        if (data.processed > 0) router.refresh();
-      }
-    } catch (err) {
-      setSyncResult(`Failed: ${err instanceof Error ? err.message : String(err)}`);
-    } finally {
-      setSyncing(false);
-    }
-  }, [router]);
 
   const filteredMessages = selectedContactId
     ? messages.filter((m) => m.contact_id === selectedContactId)
@@ -75,7 +52,6 @@ export function GroupDetailView({ group, contacts, messages }: GroupDetailViewPr
           <h2 className="font-semibold text-sm">Contacts ({contacts.length})</h2>
         </div>
         <div className="flex-1 overflow-y-auto">
-          {/* All contacts option */}
           <button
             onClick={() => setSelectedContactId(null)}
             className={cn(
@@ -122,34 +98,14 @@ export function GroupDetailView({ group, contacts, messages }: GroupDetailViewPr
 
       {/* Right panel: Emails */}
       <div className="flex-1 flex flex-col min-w-0">
-        <div className="p-3 border-b bg-muted/50 flex items-center justify-between">
-          <div>
-            <h2 className="font-semibold text-sm">
-              {selectedContact ? selectedContact.name : "All Emails"}
-            </h2>
-            <p className="text-xs text-muted-foreground">
-              {selectedContact ? selectedContact.email : `${group.company_name || group.domain}`}
-              {" "}&middot; {filteredMessages.length} {filteredMessages.length === 1 ? "message" : "messages"}
-            </p>
-          </div>
-          <div className="flex items-center gap-2">
-            {syncResult && (
-              <span className={cn(
-                "text-xs",
-                syncResult.startsWith("Error") || syncResult.startsWith("Failed")
-                  ? "text-red-600" : "text-green-600"
-              )}>
-                {syncResult}
-              </span>
-            )}
-            <button
-              onClick={handleSync}
-              disabled={syncing}
-              className="px-3 py-1 text-xs border rounded hover:bg-muted disabled:opacity-50"
-            >
-              {syncing ? "Syncing..." : "Sync Now"}
-            </button>
-          </div>
+        <div className="p-3 border-b bg-muted/50">
+          <h2 className="font-semibold text-sm">
+            {selectedContact ? selectedContact.name : "All Emails"}
+          </h2>
+          <p className="text-xs text-muted-foreground">
+            {selectedContact ? selectedContact.email : `${group.company_name || group.domain}`}
+            {" "}&middot; {filteredMessages.length} {filteredMessages.length === 1 ? "message" : "messages"}
+          </p>
         </div>
 
         <div className="flex-1 overflow-y-auto">
@@ -157,7 +113,7 @@ export function GroupDetailView({ group, contacts, messages }: GroupDetailViewPr
             <div className="p-8 text-center text-muted-foreground text-sm">
               {selectedContact
                 ? `No emails found for ${selectedContact.name}.`
-                : "No emails synced for this group yet. Connect Outlook to sync emails."}
+                : "No emails synced for this group yet. Emails sync automatically in the background."}
             </div>
           ) : (
             <div className="divide-y">
