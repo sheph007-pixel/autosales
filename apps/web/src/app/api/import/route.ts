@@ -59,6 +59,7 @@ export async function POST(request: NextRequest) {
     if (emailColumn < 0) return NextResponse.json({ success: false, message: "Select email column." });
 
     let imported = 0;
+    let skipped = 0;
     let companiesCreated = 0;
     const errors: string[] = [];
     const companyCache = new Map<string, string>();
@@ -94,7 +95,11 @@ export async function POST(request: NextRequest) {
 
         let name = fullName || (firstName || lastName ? `${firstName} ${lastName}`.trim() : "") || extractNameFromEmail(email);
         let domain = domainVal || email.split("@")[1] || "unknown.com";
-        if (isPersonalDomain(domain)) domain = email.split("@")[1] || "unknown.com";
+        if (isPersonalDomain(domain)) {
+          skipped++;
+          errors.push(`Row ${i + 2}: Skipped personal email (${domain})`);
+          continue;
+        }
 
         const prevSize = companyCache.size;
         const companyId = await getOrCreateCompany(domain, companyName || null, companyCache);
@@ -141,6 +146,7 @@ export async function POST(request: NextRequest) {
       success: true,
       message: `Import complete.`,
       imported,
+      skipped,
       companies: companiesCreated,
       totalRows: rows.length,
       errors: errors.slice(0, 50),
