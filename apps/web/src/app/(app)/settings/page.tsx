@@ -2,6 +2,7 @@ import { getOutlookConnectionStatus } from "@/lib/actions/sync";
 import { getSession } from "@/lib/auth";
 import { OutlookConnect } from "@/components/outlook-connect";
 import { AgentProfileForm } from "@/components/agent-profile-form";
+import { SyncStatusPanel } from "@/components/sync-status";
 import { getAgentProfile } from "@autosales/core/services/agent-profile.service";
 import { ensureTables } from "@autosales/db";
 
@@ -94,6 +95,15 @@ async function renderSettingsPage() {
           email={outlookStatus.email}
           lastSynced={outlookStatus.lastSynced}
         />
+      </div>
+
+      {/* Mailbox Sync Status */}
+      <div className="bg-card border rounded-lg p-6 mb-6">
+        <h2 className="text-lg font-semibold mb-4">Mailbox Sync Status</h2>
+        <p className="text-xs text-muted-foreground mb-4">
+          Background sync runs automatically every 90 seconds. Emails are stored first, then matched to groups.
+        </p>
+        <SyncStatusPanel />
       </div>
 
       {/* System Info */}

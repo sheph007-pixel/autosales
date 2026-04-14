@@ -15,6 +15,7 @@ const nextConfig = {
   transpilePackages: ["@autosales/db", "@autosales/core", "@autosales/ai", "@autosales/mail"],
   experimental: {
     serverComponentsExternalPackages: ["pg-boss", "postgres"],
+    instrumentationHook: true,
   },
   env: {
     BUILD_VERSION: gitHash,
