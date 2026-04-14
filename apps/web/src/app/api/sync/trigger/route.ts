@@ -1,11 +1,15 @@
 import { NextResponse } from "next/server";
 import { db, oauthAccounts } from "@autosales/db";
 import { eq } from "drizzle-orm";
+import { runMailboxSync } from "@/lib/sync";
+
+export const dynamic = "force-dynamic";
+export const maxDuration = 120; // allow up to 2 minutes for large syncs
 
 export async function POST() {
   try {
     const [account] = await db
-      .select()
+      .select({ id: oauthAccounts.id, lastSyncedAt: oauthAccounts.lastSyncedAt })
       .from(oauthAccounts)
       .where(eq(oauthAccounts.provider, "microsoft"))
       .limit(1);
@@ -14,15 +18,19 @@ export async function POST() {
       return NextResponse.json({ error: "No Outlook account connected" }, { status: 400 });
     }
 
-    // In production, this would queue a pg-boss job.
-    // For now, return success to indicate the trigger was received.
-    // The worker service polls for sync jobs independently.
+    const result = await runMailboxSync();
+
     return NextResponse.json({
-      success: true,
-      message: "Sync triggered. The worker will process it shortly.",
+      success: !result.error,
+      ...result,
     });
   } catch (error) {
     console.error("Sync trigger error:", error);
     return NextResponse.json({ error: "Failed to trigger sync" }, { status: 500 });
   }
+}
+
+// Also support GET for easy cron job triggering
+export async function GET() {
+  return POST();
 }
