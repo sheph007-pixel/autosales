@@ -1,6 +1,7 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useCallback } from "react";
+import { useRouter } from "next/navigation";
 import { cn } from "@/components/ui/utils";
 
 interface Contact {
@@ -35,8 +36,30 @@ interface GroupDetailViewProps {
 }
 
 export function GroupDetailView({ group, contacts, messages }: GroupDetailViewProps) {
+  const router = useRouter();
   const [selectedContactId, setSelectedContactId] = useState<string | null>(null);
   const [expandedMessageId, setExpandedMessageId] = useState<string | null>(null);
+  const [syncing, setSyncing] = useState(false);
+  const [syncResult, setSyncResult] = useState<string | null>(null);
+
+  const handleSync = useCallback(async () => {
+    setSyncing(true);
+    setSyncResult(null);
+    try {
+      const res = await fetch("/api/sync/trigger", { method: "POST" });
+      const data = await res.json();
+      if (data.error) {
+        setSyncResult(`Error: ${data.error}`);
+      } else {
+        setSyncResult(`Fetched ${data.totalFetched}, matched ${data.processed}, skipped ${data.skippedUnknown}`);
+        if (data.processed > 0) router.refresh();
+      }
+    } catch (err) {
+      setSyncResult(`Failed: ${err instanceof Error ? err.message : String(err)}`);
+    } finally {
+      setSyncing(false);
+    }
+  }, [router]);
 
   const filteredMessages = selectedContactId
     ? messages.filter((m) => m.contact_id === selectedContactId)
@@ -108,6 +131,24 @@ export function GroupDetailView({ group, contacts, messages }: GroupDetailViewPr
               {selectedContact ? selectedContact.email : `${group.company_name || group.domain}`}
               {" "}&middot; {filteredMessages.length} {filteredMessages.length === 1 ? "message" : "messages"}
             </p>
+          </div>
+          <div className="flex items-center gap-2">
+            {syncResult && (
+              <span className={cn(
+                "text-xs",
+                syncResult.startsWith("Error") || syncResult.startsWith("Failed")
+                  ? "text-red-600" : "text-green-600"
+              )}>
+                {syncResult}
+              </span>
+            )}
+            <button
+              onClick={handleSync}
+              disabled={syncing}
+              className="px-3 py-1 text-xs border rounded hover:bg-muted disabled:opacity-50"
+            >
+              {syncing ? "Syncing..." : "Sync Now"}
+            </button>
           </div>
         </div>
 

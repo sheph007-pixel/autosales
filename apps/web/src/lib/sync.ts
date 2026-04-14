@@ -17,9 +17,10 @@ let _syncing = false;
 export async function runMailboxSync(): Promise<{
   processed: number;
   skippedUnknown: number;
+  totalFetched: number;
   error?: string;
 }> {
-  if (_syncing) return { processed: 0, skippedUnknown: 0, error: "sync_in_progress" };
+  if (_syncing) return { processed: 0, skippedUnknown: 0, totalFetched: 0, error: "sync_in_progress" };
   _syncing = true;
 
   try {
@@ -30,7 +31,7 @@ export async function runMailboxSync(): Promise<{
       .limit(1);
 
     if (!account || !account.refreshToken) {
-      return { processed: 0, skippedUnknown: 0, error: "no_account" };
+      return { processed: 0, skippedUnknown: 0, totalFetched: 0, error: "no_account" };
     }
 
     // Refresh token if expired
@@ -54,20 +55,27 @@ export async function runMailboxSync(): Promise<{
 
     let processed = 0;
     let skippedUnknown = 0;
+    let totalFetched = 0;
 
     const deltaTokens = account.deltaToken
       ? (JSON.parse(account.deltaToken as string) as { inbox?: string; sent?: string })
       : {};
 
+    console.log(`[sync] account: ${userEmail}, has delta tokens: inbox=${!!deltaTokens.inbox}, sent=${!!deltaTokens.sent}`);
+
     for (const folder of ["inbox", "sentitems"] as const) {
       const deltaKey = folder === "inbox" ? "inbox" : "sent";
 
+      console.log(`[sync] fetching ${folder}...`);
       const { messages, deltaToken: newDelta } = await syncFolder(
         client,
         folder,
         userEmail,
         deltaTokens[deltaKey]
       );
+
+      console.log(`[sync] ${folder}: fetched ${messages.length} messages`);
+      totalFetched += messages.length;
 
       for (const msg of messages) {
         try {
@@ -82,6 +90,8 @@ export async function runMailboxSync(): Promise<{
       if (newDelta) deltaTokens[deltaKey] = newDelta;
     }
 
+    console.log(`[sync] total fetched: ${totalFetched}, processed: ${processed}, skipped: ${skippedUnknown}`);
+
     await db
       .update(oauthAccounts)
       .set({
@@ -91,12 +101,12 @@ export async function runMailboxSync(): Promise<{
       })
       .where(eq(oauthAccounts.id, account.id));
 
-    console.log(`[sync] complete: ${processed} processed, ${skippedUnknown} skipped`);
-    return { processed, skippedUnknown };
+    console.log(`[sync] complete: ${processed} processed, ${skippedUnknown} skipped, ${totalFetched} fetched`);
+    return { processed, skippedUnknown, totalFetched };
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
     console.error("[sync] failed:", message);
-    return { processed: 0, skippedUnknown: 0, error: message };
+    return { processed: 0, skippedUnknown: 0, totalFetched: 0, error: message };
   } finally {
     _syncing = false;
   }
