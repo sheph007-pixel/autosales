@@ -5,12 +5,13 @@ import { useState, useEffect, useMemo, useCallback, Fragment } from "react";
 // ── Types ──────────────────────────────────────────────────────────
 
 interface Domain {
-  id: string;
+  id?: string;
   domain: string;
   sentCount: number;
   receivedCount: number;
   totalCount: number;
-  excluded: boolean;
+  excluded?: boolean;
+  contactCount?: number;
 }
 
 interface Contact {
@@ -28,15 +29,6 @@ interface Contact {
   domain: string;
 }
 
-// Live results during scan (lightweight)
-interface LiveDomain {
-  domain: string;
-  sentCount: number;
-  receivedCount: number;
-  totalCount: number;
-  contactCount: number;
-}
-
 interface ScanData {
   status: "idle" | "scanning" | "cleaning" | "done" | "error";
   emailsScanned: number;
@@ -45,7 +37,7 @@ interface ScanData {
   cleaningProgress: string;
   error?: string;
   lastScannedAt: string | null;
-  domains: (Domain | LiveDomain)[];
+  domains: Domain[];
   contacts: Contact[];
 }
 
@@ -73,8 +65,10 @@ export function DiscoverClient() {
   });
   const [tab, setTab] = useState<Tab>("domains");
   const [search, setSearch] = useState("");
+  // Client-side hidden domains (works during scan + after)
+  const [hiddenDomains, setHiddenDomains] = useState<Set<string>>(new Set());
 
-  // Domain state
+  // Domain state — keyed by domain STRING, not DB id
   const [domainSort, setDomainSort] = useState<DomainSort>("total");
   const [domainDir, setDomainDir] = useState<SortDir>("desc");
   const [domainSelected, setDomainSelected] = useState<Set<string>>(new Set());
@@ -103,46 +97,38 @@ export function DiscoverClient() {
     setData((s) => ({ ...s, status: "scanning", emailsScanned: 0, domainsFound: 0, folder: "", domains: [], contacts: [] }));
     setDomainSelected(new Set());
     setContactSelected(new Set());
+    setHiddenDomains(new Set());
     await fetch("/api/discover", { method: "POST" }).catch(() => {});
   }, []);
 
-  const exclude = useCallback((type: "domain" | "contact", id: string) => {
-    // Optimistic update FIRST — instant feedback
-    if (type === "domain") {
-      setData((s) => ({ ...s, domains: s.domains.map((d) => "id" in d && d.id === id ? { ...d, excluded: true } : d) }));
-    } else {
-      setData((s) => ({ ...s, contacts: s.contacts.map((c) => c.id === id ? { ...c, excluded: true } : c) }));
+  // Exclude domain — hide client-side + persist if has DB id
+  const excludeDomain = useCallback((domainStr: string, dbId?: string) => {
+    setHiddenDomains((p) => new Set(p).add(domainStr));
+    setDomainSelected((p) => { const n = new Set(p); n.delete(domainStr); return n; });
+    if (dbId) {
+      fetch("/api/discover/exclude", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ type: "domain", id: dbId, excluded: true }),
+      }).catch(() => {});
     }
-    // Then persist to DB (fire and forget)
+  }, []);
+
+  // Exclude contact — optimistic + persist
+  const excludeContact = useCallback((id: string) => {
+    setData((s) => ({ ...s, contacts: s.contacts.map((c) => c.id === id ? { ...c, excluded: true } : c) }));
+    setContactSelected((p) => { const n = new Set(p); n.delete(id); return n; });
     fetch("/api/discover/exclude", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ type, id, excluded: true }),
+      body: JSON.stringify({ type: "contact", id, excluded: true }),
     }).catch(() => {});
   }, []);
-
-  const exportCSV = useCallback(() => {
-    if (tab === "domains") {
-      const list = domainSelected.size > 0
-        ? filteredDomains.filter((d) => "id" in d && domainSelected.has(d.id))
-        : filteredDomains;
-      const rows = [["Domain", "Sent", "Received", "Total"]];
-      for (const d of list) rows.push([d.domain, String(d.sentCount), String(d.receivedCount), String(d.totalCount)]);
-      downloadCSV(rows, "domains");
-    } else {
-      const list = contactSelected.size > 0
-        ? filteredContacts.filter((c) => contactSelected.has(c.id))
-        : filteredContacts;
-      const rows = [["First Name", "Last Name", "Company", "Email"]];
-      for (const c of list) rows.push([c.firstName || "", c.lastName || "", c.company || "", c.email]);
-      downloadCSV(rows, "contacts");
-    }
-  }, [tab]);
 
   // ── Domain filtering ─────────────────────────────────────────────
 
   const filteredDomains = useMemo(() => {
-    let list = data.domains.filter((d) => !("excluded" in d && d.excluded));
+    let list = data.domains.filter((d) => !d.excluded && !hiddenDomains.has(d.domain));
     if (search) {
       const q = search.toLowerCase();
       list = list.filter((d) => d.domain.includes(q));
@@ -157,16 +143,17 @@ export function DiscoverClient() {
       }
       return domainDir === "desc" ? -cmp : cmp;
     });
-  }, [data.domains, search, domainSort, domainDir]);
+  }, [data.domains, hiddenDomains, search, domainSort, domainDir]);
 
   // ── Contact filtering ────────────────────────────────────────────
 
   const filteredContacts = useMemo(() => {
-    // Exclude contacts from excluded domains
-    const excludedDomainIds = new Set(
-      data.domains.filter((d) => "excluded" in d && d.excluded).map((d) => "id" in d ? d.id : "")
-    );
-    let list = data.contacts.filter((c) => !c.excluded && !excludedDomainIds.has(c.domainId));
+    // Exclude contacts from excluded/hidden domains
+    const excludedDomains = new Set([
+      ...hiddenDomains,
+      ...data.domains.filter((d) => d.excluded).map((d) => d.domain),
+    ]);
+    let list = data.contacts.filter((c) => !c.excluded && !excludedDomains.has(c.domain));
     if (search) {
       const q = search.toLowerCase();
       list = list.filter((c) =>
@@ -186,13 +173,12 @@ export function DiscoverClient() {
       }
       return contactDir === "desc" ? -cmp : cmp;
     });
-  }, [data.contacts, data.domains, search, contactSort, contactDir]);
+  }, [data.contacts, data.domains, hiddenDomains, search, contactSort, contactDir]);
 
-  // Re-bind exportCSV with current data
   const doExport = () => {
     if (tab === "domains") {
       const list = domainSelected.size > 0
-        ? filteredDomains.filter((d) => "id" in d && domainSelected.has(d.id))
+        ? filteredDomains.filter((d) => domainSelected.has(d.domain))
         : filteredDomains;
       const rows = [["Domain", "Sent", "Received", "Total"]];
       for (const d of list) rows.push([d.domain, String(d.sentCount), String(d.receivedCount), String(d.totalCount)]);
@@ -211,7 +197,6 @@ export function DiscoverClient() {
   const isCleaning = data.status === "cleaning";
   const isBusy = isScanning || isCleaning;
   const hasDomains = data.domains.length > 0;
-
   const selectedCount = tab === "domains" ? domainSelected.size : contactSelected.size;
 
   return (
@@ -220,22 +205,16 @@ export function DiscoverClient() {
       <div className="border-b bg-card px-6 py-3 flex items-center justify-between">
         <div className="flex items-center gap-6">
           <h1 className="text-lg font-bold">Kennion</h1>
-          {/* Tabs */}
           <div className="flex gap-1">
             <button
               onClick={() => { setTab("domains"); setSearch(""); }}
               className={`px-3 py-1 rounded text-sm font-medium ${tab === "domains" ? "bg-primary text-primary-foreground" : "text-muted-foreground hover:bg-muted"}`}
-            >
-              Domains
-            </button>
+            >Domains</button>
             <button
               onClick={() => { setTab("contacts"); setSearch(""); }}
               className={`px-3 py-1 rounded text-sm font-medium ${tab === "contacts" ? "bg-primary text-primary-foreground" : "text-muted-foreground hover:bg-muted"}`}
-            >
-              Contacts
-            </button>
+            >Contacts</button>
           </div>
-          {/* Status */}
           {isBusy && (
             <span className="text-sm text-muted-foreground flex items-center gap-2">
               <span className="inline-block animate-spin h-3 w-3 border-2 border-primary border-t-transparent rounded-full" />
@@ -252,44 +231,36 @@ export function DiscoverClient() {
           )}
         </div>
         <div className="flex items-center gap-3">
-          {selectedCount > 0 && (
-            <span className="text-xs text-muted-foreground">{selectedCount} selected</span>
+          {selectedCount > 0 && <span className="text-xs text-muted-foreground">{selectedCount} selected</span>}
+          {hiddenDomains.size > 0 && (
+            <button onClick={() => setHiddenDomains(new Set())} className="text-xs text-muted-foreground hover:text-foreground">
+              Show {hiddenDomains.size} hidden
+            </button>
           )}
           {hasDomains && (
-            <button onClick={doExport} className="px-3 py-1.5 border rounded text-sm hover:bg-muted">
-              Export CSV
-            </button>
+            <button onClick={doExport} className="px-3 py-1.5 border rounded text-sm hover:bg-muted">Export CSV</button>
           )}
           <button
             onClick={startScan}
             disabled={isBusy}
-            className={`px-4 py-1.5 rounded text-sm font-medium ${
-              isBusy ? "bg-muted text-muted-foreground cursor-not-allowed" : "bg-primary text-primary-foreground hover:bg-primary/90"
-            }`}
-          >
-            {isBusy ? "Scanning..." : hasDomains ? "Re-scan" : "Scan Mailbox"}
-          </button>
+            className={`px-4 py-1.5 rounded text-sm font-medium ${isBusy ? "bg-muted text-muted-foreground cursor-not-allowed" : "bg-primary text-primary-foreground hover:bg-primary/90"}`}
+          >{isBusy ? "Scanning..." : hasDomains ? "Re-scan" : "Scan Mailbox"}</button>
         </div>
       </div>
 
-      {/* Error */}
       {data.status === "error" && (
         <div className="mx-6 mt-4 p-3 bg-red-50 border border-red-200 rounded text-sm text-red-800">{data.error}</div>
       )}
 
-      {/* Empty state */}
       {!hasDomains && !isBusy && data.status !== "error" && (
         <div className="flex items-center justify-center" style={{ height: "calc(100vh - 60px)" }}>
           <div className="text-center">
             <p className="text-muted-foreground mb-4">Scan your Outlook mailbox to discover domains and contacts.</p>
-            <button onClick={startScan} className="px-6 py-2 bg-primary text-primary-foreground rounded text-sm font-medium hover:bg-primary/90">
-              Scan Mailbox
-            </button>
+            <button onClick={startScan} className="px-6 py-2 bg-primary text-primary-foreground rounded text-sm font-medium hover:bg-primary/90">Scan Mailbox</button>
           </div>
         </div>
       )}
 
-      {/* Content */}
       {hasDomains && (
         <div className="px-6 pt-3 pb-6">
           <div className="mb-3">
@@ -314,14 +285,14 @@ export function DiscoverClient() {
                 if (domainSort === key) setDomainDir((d) => d === "desc" ? "asc" : "desc");
                 else { setDomainSort(key); setDomainDir("desc"); }
               }}
-              onToggleSelect={(key) => setDomainSelected((p) => { const n = new Set(p); n.has(key) ? n.delete(key) : n.add(key); return n; })}
+              onToggleSelect={(d) => setDomainSelected((p) => { const n = new Set(p); n.has(d) ? n.delete(d) : n.add(d); return n; })}
               onToggleSelectAll={() => {
-                const ids = filteredDomains.filter((d) => "id" in d).map((d) => (d as Domain).id);
-                if (domainSelected.size === ids.length) setDomainSelected(new Set());
-                else setDomainSelected(new Set(ids));
+                const all = filteredDomains.map((d) => d.domain);
+                if (domainSelected.size === all.length) setDomainSelected(new Set());
+                else setDomainSelected(new Set(all));
               }}
-              onToggleExpand={(key) => setDomainExpanded((p) => { const n = new Set(p); n.has(key) ? n.delete(key) : n.add(key); return n; })}
-              onExclude={(id) => exclude("domain", id)}
+              onToggleExpand={(d) => setDomainExpanded((p) => { const n = new Set(p); n.has(d) ? n.delete(d) : n.add(d); return n; })}
+              onExclude={excludeDomain}
             />
           ) : (
             <ContactsTable
@@ -333,12 +304,12 @@ export function DiscoverClient() {
                 if (contactSort === key) setContactDir((d) => d === "desc" ? "asc" : "desc");
                 else { setContactSort(key); setContactDir("asc"); }
               }}
-              onToggleSelect={(key) => setContactSelected((p) => { const n = new Set(p); n.has(key) ? n.delete(key) : n.add(key); return n; })}
+              onToggleSelect={(id) => setContactSelected((p) => { const n = new Set(p); n.has(id) ? n.delete(id) : n.add(id); return n; })}
               onToggleSelectAll={() => {
                 if (contactSelected.size === filteredContacts.length) setContactSelected(new Set());
                 else setContactSelected(new Set(filteredContacts.map((c) => c.id)));
               }}
-              onExclude={(id) => exclude("contact", id)}
+              onExclude={excludeContact}
             />
           )}
         </div>
@@ -353,21 +324,20 @@ function DomainsTable({
   domains, contacts, selected, expanded, sortKey, sortDir,
   onToggleSort, onToggleSelect, onToggleSelectAll, onToggleExpand, onExclude,
 }: {
-  domains: (Domain | LiveDomain)[];
+  domains: Domain[];
   contacts: Contact[];
   selected: Set<string>;
   expanded: Set<string>;
   sortKey: DomainSort;
   sortDir: SortDir;
   onToggleSort: (key: DomainSort) => void;
-  onToggleSelect: (key: string) => void;
+  onToggleSelect: (domain: string) => void;
   onToggleSelectAll: () => void;
-  onToggleExpand: (key: string) => void;
-  onExclude: (id: string) => void;
+  onToggleExpand: (domain: string) => void;
+  onExclude: (domain: string, dbId?: string) => void;
 }) {
   const arr = (key: DomainSort) => sortKey === key ? (sortDir === "desc" ? " \u2193" : " \u2191") : "";
-  const allIds = domains.filter((d) => "id" in d).map((d) => (d as Domain).id);
-  const allSelected = allIds.length > 0 && selected.size === allIds.length;
+  const allSelected = domains.length > 0 && selected.size === domains.length;
 
   return (
     <div className="border rounded-lg overflow-hidden bg-card">
@@ -386,15 +356,16 @@ function DomainsTable({
           {domains.length === 0 ? (
             <tr><td colSpan={6} className="p-8 text-center text-muted-foreground">No domains match.</td></tr>
           ) : domains.map((d) => {
-            const id = "id" in d ? d.id : d.domain;
-            const isExp = expanded.has(id);
+            const isExp = expanded.has(d.domain);
             const domainContacts = contacts.filter((c) => c.domain === d.domain && !c.excluded);
-            const contactCount = "contactCount" in d ? d.contactCount : domainContacts.length;
+            const contactCount = d.contactCount ?? domainContacts.length;
             return (
-              <Fragment key={id}>
+              <Fragment key={d.domain}>
                 <tr className="border-t hover:bg-muted/50">
-                  <td className="p-3">{"id" in d && <input type="checkbox" checked={selected.has(d.id)} onChange={() => onToggleSelect(d.id)} className="rounded" />}</td>
-                  <td className="p-3 font-medium cursor-pointer" onClick={() => onToggleExpand(id)}>
+                  <td className="p-3">
+                    <input type="checkbox" checked={selected.has(d.domain)} onChange={() => onToggleSelect(d.domain)} className="rounded" />
+                  </td>
+                  <td className="p-3 font-medium cursor-pointer" onClick={() => onToggleExpand(d.domain)}>
                     {d.domain}
                     <span className="text-xs text-muted-foreground ml-2">{contactCount}</span>
                   </td>
@@ -403,8 +374,14 @@ function DomainsTable({
                   <td className="p-3 text-right font-medium">{d.totalCount}</td>
                   <td className="p-3">
                     <div className="flex items-center gap-1">
-                      {contactCount > 0 && <button onClick={() => onToggleExpand(id)} className="text-muted-foreground hover:text-foreground text-xs">{isExp ? "\u25BC" : "\u25B6"}</button>}
-                      {"id" in d && <button onClick={() => onExclude(d.id)} className="text-muted-foreground hover:text-red-500 text-xs ml-1" title="Exclude">{"\u2715"}</button>}
+                      {contactCount > 0 && (
+                        <button onClick={() => onToggleExpand(d.domain)} className="text-muted-foreground hover:text-foreground text-xs">
+                          {isExp ? "\u25BC" : "\u25B6"}
+                        </button>
+                      )}
+                      <button onClick={() => onExclude(d.domain, d.id)} className="text-muted-foreground hover:text-red-500 text-xs ml-1" title="Exclude">
+                        {"\u2715"}
+                      </button>
                     </div>
                   </td>
                 </tr>
