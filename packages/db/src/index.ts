@@ -247,6 +247,35 @@ CREATE TABLE agent_profile (
 );
 
 INSERT INTO agent_profile (singleton) VALUES (true) ON CONFLICT DO NOTHING;
+
+CREATE TABLE discovered_domains (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  domain VARCHAR(255) NOT NULL UNIQUE,
+  sent_count INTEGER NOT NULL DEFAULT 0,
+  received_count INTEGER NOT NULL DEFAULT 0,
+  total_count INTEGER NOT NULL DEFAULT 0,
+  excluded BOOLEAN NOT NULL DEFAULT false,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX idx_disc_domains_total ON discovered_domains(total_count);
+
+CREATE TABLE discovered_contacts (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  domain_id UUID NOT NULL REFERENCES discovered_domains(id) ON DELETE CASCADE,
+  email VARCHAR(255) NOT NULL UNIQUE,
+  raw_name VARCHAR(255),
+  first_name VARCHAR(255),
+  last_name VARCHAR(255),
+  company VARCHAR(255),
+  sent_count INTEGER NOT NULL DEFAULT 0,
+  received_count INTEGER NOT NULL DEFAULT 0,
+  excluded BOOLEAN NOT NULL DEFAULT false,
+  ai_cleaned BOOLEAN NOT NULL DEFAULT false,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX idx_disc_contacts_domain ON discovered_contacts(domain_id);
 `;
 
 // Idempotent migration statements: adds primary_contact_id, remaps statuses, backfills,
@@ -289,6 +318,35 @@ const GROUPS_MIGRATION_STATEMENTS = [
     CHECK (singleton = true)
   )`,
   `INSERT INTO agent_profile (singleton) VALUES (true) ON CONFLICT DO NOTHING`,
+
+  // Discover: persistent domain + contact tables
+  `CREATE TABLE IF NOT EXISTS discovered_domains (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    domain VARCHAR(255) NOT NULL UNIQUE,
+    sent_count INTEGER NOT NULL DEFAULT 0,
+    received_count INTEGER NOT NULL DEFAULT 0,
+    total_count INTEGER NOT NULL DEFAULT 0,
+    excluded BOOLEAN NOT NULL DEFAULT false,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+  )`,
+  `CREATE INDEX IF NOT EXISTS idx_disc_domains_total ON discovered_domains(total_count)`,
+  `CREATE TABLE IF NOT EXISTS discovered_contacts (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    domain_id UUID NOT NULL REFERENCES discovered_domains(id) ON DELETE CASCADE,
+    email VARCHAR(255) NOT NULL UNIQUE,
+    raw_name VARCHAR(255),
+    first_name VARCHAR(255),
+    last_name VARCHAR(255),
+    company VARCHAR(255),
+    sent_count INTEGER NOT NULL DEFAULT 0,
+    received_count INTEGER NOT NULL DEFAULT 0,
+    excluded BOOLEAN NOT NULL DEFAULT false,
+    ai_cleaned BOOLEAN NOT NULL DEFAULT false,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+  )`,
+  `CREATE INDEX IF NOT EXISTS idx_disc_contacts_domain ON discovered_contacts(domain_id)`,
 ];
 
 export async function ensureTables() {

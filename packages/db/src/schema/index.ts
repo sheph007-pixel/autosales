@@ -39,3 +39,9 @@ export type { JobRun, NewJobRun } from "./job-runs";
 
 export { agentProfile } from "./agent-profile";
 export type { AgentProfile, NewAgentProfile } from "./agent-profile";
+
+export { discoveredDomains } from "./discovered-domains";
+export type { DiscoveredDomain, NewDiscoveredDomain } from "./discovered-domains";
+
+export { discoveredContacts } from "./discovered-contacts";
+export type { DiscoveredContact, NewDiscoveredContact } from "./discovered-contacts";
