@@ -1,16 +1,16 @@
 import { NextResponse } from "next/server";
 import { db, discoveredDomains, discoveredContacts, ensureTables } from "@autosales/db";
 import { desc, eq, sql } from "drizzle-orm";
-import { getScanState, getLiveResults, startFullScan } from "@/lib/discover";
+import { getScanState, getLiveResults, getLiveContacts, startFullScan } from "@/lib/discover";
 
 export const dynamic = "force-dynamic";
 
 export async function GET() {
   const state = getScanState();
 
-  // During active scanning, return live in-memory domain results
+  // During active scanning, return live in-memory results
   if (state.status === "scanning") {
-    return NextResponse.json({ ...state, domains: getLiveResults(), contacts: [] });
+    return NextResponse.json({ ...state, domains: getLiveResults(), contacts: getLiveContacts() });
   }
 
   // For all other states (idle, cleaning, done, error): serve from DB

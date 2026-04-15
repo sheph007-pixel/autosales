@@ -64,6 +64,30 @@ export function getLiveResults(): LiveDomain[] {
     .sort((a, b) => b.totalCount - a.totalCount);
 }
 
+export interface LiveContact {
+  email: string;
+  name: string;
+  domain: string;
+  sentCount: number;
+  receivedCount: number;
+}
+
+export function getLiveContacts(): LiveContact[] {
+  const contacts: LiveContact[] = [];
+  for (const [domain, agg] of _domainMap.entries()) {
+    for (const c of agg.contacts.values()) {
+      contacts.push({
+        email: c.email,
+        name: c.name,
+        domain,
+        sentCount: c.sentCount,
+        receivedCount: c.receivedCount,
+      });
+    }
+  }
+  return contacts.sort((a, b) => (b.sentCount + b.receivedCount) - (a.sentCount + a.receivedCount));
+}
+
 // ── Full scan ──────────────────────────────────────────────────────
 
 export async function startFullScan(): Promise<void> {

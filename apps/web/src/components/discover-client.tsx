@@ -15,17 +15,18 @@ interface Domain {
 }
 
 interface Contact {
-  id: string;
-  domainId: string;
+  id?: string;
+  domainId?: string;
   email: string;
-  rawName: string | null;
-  firstName: string | null;
-  lastName: string | null;
-  company: string | null;
+  name?: string;         // live scan name
+  rawName?: string | null;
+  firstName?: string | null;
+  lastName?: string | null;
+  company?: string | null;
   sentCount: number;
   receivedCount: number;
-  excluded: boolean;
-  aiCleaned: boolean;
+  excluded?: boolean;
+  aiCleaned?: boolean;
   domain: string;
 }
 
@@ -114,15 +115,17 @@ export function DiscoverClient() {
     }
   }, []);
 
-  // Exclude contact — optimistic + persist
-  const excludeContact = useCallback((id: string) => {
-    setData((s) => ({ ...s, contacts: s.contacts.map((c) => c.id === id ? { ...c, excluded: true } : c) }));
-    setContactSelected((p) => { const n = new Set(p); n.delete(id); return n; });
-    fetch("/api/discover/exclude", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ type: "contact", id, excluded: true }),
-    }).catch(() => {});
+  // Exclude contact — hide by email (works for live + DB), persist if has DB id
+  const excludeContact = useCallback((email: string, dbId?: string) => {
+    setData((s) => ({ ...s, contacts: s.contacts.map((c) => c.email === email ? { ...c, excluded: true } : c) }));
+    setContactSelected((p) => { const n = new Set(p); n.delete(email); return n; });
+    if (dbId) {
+      fetch("/api/discover/exclude", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ type: "contact", id: dbId, excluded: true }),
+      }).catch(() => {});
+    }
   }, []);
 
   // ── Domain filtering ─────────────────────────────────────────────
@@ -160,7 +163,9 @@ export function DiscoverClient() {
         (c.firstName?.toLowerCase() || "").includes(q) ||
         (c.lastName?.toLowerCase() || "").includes(q) ||
         (c.company?.toLowerCase() || "").includes(q) ||
-        c.email.includes(q)
+        (c.name?.toLowerCase() || "").includes(q) ||
+        c.email.includes(q) ||
+        c.domain.includes(q)
       );
     }
     return [...list].sort((a, b) => {
@@ -185,10 +190,10 @@ export function DiscoverClient() {
       downloadCSV(rows, "domains");
     } else {
       const list = contactSelected.size > 0
-        ? filteredContacts.filter((c) => contactSelected.has(c.id))
+        ? filteredContacts.filter((c) => contactSelected.has(c.email))
         : filteredContacts;
-      const rows = [["First Name", "Last Name", "Company", "Email"]];
-      for (const c of list) rows.push([c.firstName || "", c.lastName || "", c.company || "", c.email]);
+      const rows = [["First Name", "Last Name", "Company", "Email", "Sent", "Received", "Total"]];
+      for (const c of list) rows.push([c.firstName || c.name || "", c.lastName || "", c.company || c.domain, c.email, String(c.sentCount), String(c.receivedCount), String(c.sentCount + c.receivedCount)]);
       downloadCSV(rows, "contacts");
     }
   };
@@ -304,10 +309,10 @@ export function DiscoverClient() {
                 if (contactSort === key) setContactDir((d) => d === "desc" ? "asc" : "desc");
                 else { setContactSort(key); setContactDir("asc"); }
               }}
-              onToggleSelect={(id) => setContactSelected((p) => { const n = new Set(p); n.has(id) ? n.delete(id) : n.add(id); return n; })}
+              onToggleSelect={(email) => setContactSelected((p) => { const n = new Set(p); n.has(email) ? n.delete(email) : n.add(email); return n; })}
               onToggleSelectAll={() => {
                 if (contactSelected.size === filteredContacts.length) setContactSelected(new Set());
-                else setContactSelected(new Set(filteredContacts.map((c) => c.id)));
+                else setContactSelected(new Set(filteredContacts.map((c) => c.email)));
               }}
               onExclude={excludeContact}
             />
@@ -409,6 +414,8 @@ function DomainsTable({
 
 // ── Contacts Table ─────────────────────────────────────────────────
 
+type ContactSortFull = ContactSort | "sent" | "received" | "total";
+
 function ContactsTable({
   contacts, selected, sortKey, sortDir,
   onToggleSort, onToggleSelect, onToggleSelectAll, onExclude,
@@ -418,12 +425,13 @@ function ContactsTable({
   sortKey: ContactSort;
   sortDir: SortDir;
   onToggleSort: (key: ContactSort) => void;
-  onToggleSelect: (key: string) => void;
+  onToggleSelect: (email: string) => void;
   onToggleSelectAll: () => void;
-  onExclude: (id: string) => void;
+  onExclude: (email: string, dbId?: string) => void;
 }) {
-  const arr = (key: ContactSort) => sortKey === key ? (sortDir === "desc" ? " \u2193" : " \u2191") : "";
+  const arr = (key: string) => sortKey === key ? (sortDir === "desc" ? " \u2193" : " \u2191") : "";
   const allSelected = contacts.length > 0 && selected.size === contacts.length;
+  const dash = <span className="text-muted-foreground italic">--</span>;
 
   return (
     <div className="border rounded-lg overflow-hidden bg-card">
@@ -435,21 +443,27 @@ function ContactsTable({
             <th className="text-left p-3 font-medium"><button onClick={() => onToggleSort("lastName")} className="hover:underline">Last Name{arr("lastName")}</button></th>
             <th className="text-left p-3 font-medium"><button onClick={() => onToggleSort("company")} className="hover:underline">Company{arr("company")}</button></th>
             <th className="text-left p-3 font-medium"><button onClick={() => onToggleSort("email")} className="hover:underline">Email{arr("email")}</button></th>
+            <th className="text-right p-3 font-medium w-16">Sent</th>
+            <th className="text-right p-3 font-medium w-16">Recv</th>
+            <th className="text-right p-3 font-medium w-16">Total</th>
             <th className="p-3 w-10" />
           </tr>
         </thead>
         <tbody>
           {contacts.length === 0 ? (
-            <tr><td colSpan={6} className="p-8 text-center text-muted-foreground">No contacts match.</td></tr>
+            <tr><td colSpan={9} className="p-8 text-center text-muted-foreground">No contacts match.</td></tr>
           ) : contacts.map((c) => (
-            <tr key={c.id} className="border-t hover:bg-muted/50">
-              <td className="p-3"><input type="checkbox" checked={selected.has(c.id)} onChange={() => onToggleSelect(c.id)} className="rounded" /></td>
-              <td className="p-3">{c.firstName || <span className="text-muted-foreground italic">--</span>}</td>
-              <td className="p-3">{c.lastName || <span className="text-muted-foreground italic">--</span>}</td>
-              <td className="p-3">{c.company || <span className="text-muted-foreground italic">--</span>}</td>
+            <tr key={c.email} className="border-t hover:bg-muted/50">
+              <td className="p-3"><input type="checkbox" checked={selected.has(c.email)} onChange={() => onToggleSelect(c.email)} className="rounded" /></td>
+              <td className="p-3">{c.firstName || c.name?.split(" ")[0] || dash}</td>
+              <td className="p-3">{c.lastName || c.name?.split(" ").slice(1).join(" ") || dash}</td>
+              <td className="p-3">{c.company || c.domain}</td>
               <td className="p-3 text-muted-foreground">{c.email}</td>
+              <td className="p-3 text-right text-muted-foreground">{c.sentCount}</td>
+              <td className="p-3 text-right text-muted-foreground">{c.receivedCount}</td>
+              <td className="p-3 text-right font-medium">{c.sentCount + c.receivedCount}</td>
               <td className="p-3">
-                <button onClick={() => onExclude(c.id)} className="text-muted-foreground hover:text-red-500 text-xs" title="Exclude">{"\u2715"}</button>
+                <button onClick={() => onExclude(c.email, c.id)} className="text-muted-foreground hover:text-red-500 text-xs" title="Exclude">{"\u2715"}</button>
               </td>
             </tr>
           ))}
