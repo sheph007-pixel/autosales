@@ -106,18 +106,19 @@ export function DiscoverClient() {
     await fetch("/api/discover", { method: "POST" }).catch(() => {});
   }, []);
 
-  const exclude = useCallback(async (type: "domain" | "contact", id: string) => {
-    await fetch("/api/discover/exclude", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ type, id, excluded: true }),
-    });
-    // Optimistic update
+  const exclude = useCallback((type: "domain" | "contact", id: string) => {
+    // Optimistic update FIRST — instant feedback
     if (type === "domain") {
       setData((s) => ({ ...s, domains: s.domains.map((d) => "id" in d && d.id === id ? { ...d, excluded: true } : d) }));
     } else {
       setData((s) => ({ ...s, contacts: s.contacts.map((c) => c.id === id ? { ...c, excluded: true } : c) }));
     }
+    // Then persist to DB (fire and forget)
+    fetch("/api/discover/exclude", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ type, id, excluded: true }),
+    }).catch(() => {});
   }, []);
 
   const exportCSV = useCallback(() => {

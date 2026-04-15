@@ -8,38 +8,44 @@ export const dynamic = "force-dynamic";
 export async function GET() {
   const state = getScanState();
 
-  // During scan, return live in-memory results
+  // During active scanning, return live in-memory domain results
   if (state.status === "scanning") {
     return NextResponse.json({ ...state, domains: getLiveResults(), contacts: [] });
   }
 
-  // Otherwise serve from DB
+  // For all other states (idle, cleaning, done, error): serve from DB
   try {
     await ensureTables();
 
-    const domains = await db.select().from(discoveredDomains).orderBy(desc(discoveredDomains.totalCount));
+    const domains = await db
+      .select()
+      .from(discoveredDomains)
+      .orderBy(desc(discoveredDomains.totalCount));
 
-    const contacts = await db.select({
-      id: discoveredContacts.id,
-      domainId: discoveredContacts.domainId,
-      email: discoveredContacts.email,
-      rawName: discoveredContacts.rawName,
-      firstName: discoveredContacts.firstName,
-      lastName: discoveredContacts.lastName,
-      company: discoveredContacts.company,
-      sentCount: discoveredContacts.sentCount,
-      receivedCount: discoveredContacts.receivedCount,
-      excluded: discoveredContacts.excluded,
-      aiCleaned: discoveredContacts.aiCleaned,
-      domain: discoveredDomains.domain,
-    })
+    const contacts = await db
+      .select({
+        id: discoveredContacts.id,
+        domainId: discoveredContacts.domainId,
+        email: discoveredContacts.email,
+        rawName: discoveredContacts.rawName,
+        firstName: discoveredContacts.firstName,
+        lastName: discoveredContacts.lastName,
+        company: discoveredContacts.company,
+        sentCount: discoveredContacts.sentCount,
+        receivedCount: discoveredContacts.receivedCount,
+        excluded: discoveredContacts.excluded,
+        aiCleaned: discoveredContacts.aiCleaned,
+        domain: discoveredDomains.domain,
+      })
       .from(discoveredContacts)
       .innerJoin(discoveredDomains, eq(discoveredContacts.domainId, discoveredDomains.id))
-      .orderBy(discoveredContacts.company, discoveredContacts.lastName);
+      .orderBy(
+        sql`COALESCE(${discoveredContacts.company}, '') ASC`,
+        sql`COALESCE(${discoveredContacts.lastName}, '') ASC`
+      );
 
-    // Get last scan time from most recent domain update
-    const [latest] = await db.select({ t: sql<string>`MAX(updated_at)` }).from(discoveredDomains);
-    const lastScannedAt = state.lastScannedAt || (latest?.t ? new Date(latest.t).toISOString() : null);
+    // Last scan time
+    const lastScannedAt = state.lastScannedAt || null;
 
     return NextResponse.json({
       ...state,
@@ -48,6 +54,7 @@ export async function GET() {
       contacts,
     });
   } catch (err) {
+    console.error("[discover] GET error:", err);
     return NextResponse.json({
       ...state,
       domains: [],

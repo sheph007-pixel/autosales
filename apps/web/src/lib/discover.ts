@@ -207,49 +207,63 @@ function processMessage(msg: Record<string, unknown>, userEmail: string) {
 // ── Persist to DB ──────────────────────────────────────────────────
 
 async function persistToDatabase() {
+  let domainsSaved = 0;
+  let contactsSaved = 0;
+
   for (const [domain, agg] of _domainMap.entries()) {
     const total = agg.sentCount + agg.receivedCount;
 
-    // Upsert domain
-    const [row] = await db
-      .insert(discoveredDomains)
-      .values({ domain, sentCount: agg.sentCount, receivedCount: agg.receivedCount, totalCount: total })
-      .onConflictDoUpdate({
-        target: discoveredDomains.domain,
-        set: {
-          sentCount: sql`${agg.sentCount}`,
-          receivedCount: sql`${agg.receivedCount}`,
-          totalCount: sql`${total}`,
-          updatedAt: sql`now()`,
-        },
-      })
-      .returning({ id: discoveredDomains.id });
-
-    if (!row) continue;
-    const domainId = row.id;
-
-    // Upsert contacts
-    for (const contact of agg.contacts.values()) {
-      await db
-        .insert(discoveredContacts)
-        .values({
-          domainId,
-          email: contact.email,
-          rawName: contact.name || null,
-          sentCount: contact.sentCount,
-          receivedCount: contact.receivedCount,
-        })
+    try {
+      // Upsert domain
+      const rows = await db
+        .insert(discoveredDomains)
+        .values({ domain, sentCount: agg.sentCount, receivedCount: agg.receivedCount, totalCount: total })
         .onConflictDoUpdate({
-          target: discoveredContacts.email,
+          target: discoveredDomains.domain,
           set: {
-            rawName: sql`COALESCE(NULLIF(${contact.name}, ''), discovered_contacts.raw_name)`,
-            sentCount: sql`${contact.sentCount}`,
-            receivedCount: sql`${contact.receivedCount}`,
+            sentCount: sql`${agg.sentCount}`,
+            receivedCount: sql`${agg.receivedCount}`,
+            totalCount: sql`${total}`,
             updatedAt: sql`now()`,
           },
-        });
+        })
+        .returning({ id: discoveredDomains.id });
+
+      const domainId = rows[0]?.id;
+      if (!domainId) continue;
+      domainsSaved++;
+
+      // Upsert contacts
+      for (const contact of agg.contacts.values()) {
+        try {
+          await db
+            .insert(discoveredContacts)
+            .values({
+              domainId,
+              email: contact.email,
+              rawName: contact.name || null,
+              sentCount: contact.sentCount,
+              receivedCount: contact.receivedCount,
+            })
+            .onConflictDoUpdate({
+              target: discoveredContacts.email,
+              set: {
+                rawName: sql`COALESCE(NULLIF(${contact.name}, ''), discovered_contacts.raw_name)`,
+                sentCount: sql`${contact.sentCount}`,
+                receivedCount: sql`${contact.receivedCount}`,
+                updatedAt: sql`now()`,
+              },
+          });
+          contactsSaved++;
+        } catch (err) {
+          console.error(`[discover] contact upsert failed for ${contact.email}:`, err);
+        }
+      }
+    } catch (err) {
+      console.error(`[discover] domain upsert failed for ${domain}:`, err);
     }
   }
+  console.log(`[discover] persisted ${domainsSaved} domains, ${contactsSaved} contacts`);
 }
 
 // ── AI cleanup ─────────────────────────────────────────────────────
