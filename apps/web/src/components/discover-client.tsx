@@ -128,6 +128,38 @@ export function DiscoverClient() {
     }
   }, []);
 
+  // Bulk exclude selected domains
+  const excludeSelectedDomains = useCallback(() => {
+    const selectedDomainStrs = new Set(domainSelected);
+    // Hide all client-side
+    setHiddenDomains((p) => { const n = new Set(p); for (const d of selectedDomainStrs) n.add(d); return n; });
+    // Collect DB ids for persistence
+    const dbIds = data.domains.filter((d) => d.id && selectedDomainStrs.has(d.domain)).map((d) => d.id!);
+    if (dbIds.length > 0) {
+      fetch("/api/discover/exclude", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ type: "domain", ids: dbIds, excluded: true }),
+      }).catch(() => {});
+    }
+    setDomainSelected(new Set());
+  }, [domainSelected, data.domains]);
+
+  // Bulk exclude selected contacts
+  const excludeSelectedContacts = useCallback(() => {
+    const selectedEmails = new Set(contactSelected);
+    setData((s) => ({ ...s, contacts: s.contacts.map((c) => selectedEmails.has(c.email) ? { ...c, excluded: true } : c) }));
+    const dbIds = data.contacts.filter((c) => c.id && selectedEmails.has(c.email)).map((c) => c.id!);
+    if (dbIds.length > 0) {
+      fetch("/api/discover/exclude", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ type: "contact", ids: dbIds, excluded: true }),
+      }).catch(() => {});
+    }
+    setContactSelected(new Set());
+  }, [contactSelected, data.contacts]);
+
   // ── Domain filtering ─────────────────────────────────────────────
 
   const filteredDomains = useMemo(() => {
@@ -236,7 +268,15 @@ export function DiscoverClient() {
           )}
         </div>
         <div className="flex items-center gap-3">
-          {selectedCount > 0 && <span className="text-xs text-muted-foreground">{selectedCount} selected</span>}
+          {selectedCount > 0 && (
+            <>
+              <span className="text-xs text-muted-foreground">{selectedCount} selected</span>
+              <button
+                onClick={tab === "domains" ? excludeSelectedDomains : excludeSelectedContacts}
+                className="px-3 py-1.5 border border-red-200 text-red-600 rounded text-sm hover:bg-red-50"
+              >Exclude Selected</button>
+            </>
+          )}
           {hiddenDomains.size > 0 && (
             <button onClick={() => setHiddenDomains(new Set())} className="text-xs text-muted-foreground hover:text-foreground">
               Show {hiddenDomains.size} hidden

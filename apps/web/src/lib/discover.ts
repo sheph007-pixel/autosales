@@ -90,6 +90,22 @@ export function getLiveContacts(): LiveContact[] {
 
 // ── Full scan ──────────────────────────────────────────────────────
 
+async function refreshToken(account: { id: string; refreshToken: string | null; accessToken: string | null; tokenExpiresAt: Date | null }): Promise<string> {
+  let accessToken = account.accessToken!;
+  if (account.tokenExpiresAt && account.tokenExpiresAt < new Date()) {
+    console.log("[discover] refreshing expired token");
+    const tokens = await refreshAccessToken(account.refreshToken!);
+    accessToken = tokens.access_token;
+    await db.update(oauthAccounts).set({
+      accessToken: tokens.access_token,
+      refreshToken: tokens.refresh_token ?? account.refreshToken,
+      tokenExpiresAt: new Date(Date.now() + tokens.expires_in * 1000),
+      updatedAt: new Date(),
+    }).where(eq(oauthAccounts.id, account.id));
+  }
+  return accessToken;
+}
+
 export async function startFullScan(): Promise<void> {
   if (_status === "scanning" || _status === "cleaning") return;
 
@@ -112,28 +128,30 @@ export async function startFullScan(): Promise<void> {
       return;
     }
 
-    let accessToken = account.accessToken!;
-    if (account.tokenExpiresAt && account.tokenExpiresAt < new Date()) {
-      const tokens = await refreshAccessToken(account.refreshToken);
-      accessToken = tokens.access_token;
-      await db.update(oauthAccounts).set({
-        accessToken: tokens.access_token,
-        refreshToken: tokens.refresh_token ?? account.refreshToken,
-        tokenExpiresAt: new Date(Date.now() + tokens.expires_in * 1000),
-        updatedAt: new Date(),
-      }).where(eq(oauthAccounts.id, account.id));
-    }
-
-    const client = new GraphClient(accessToken);
+    let accessToken = await refreshToken(account);
+    let client = new GraphClient(accessToken);
     const profile = await client.getProfile();
     const userEmail = normalizeEmail(profile.mail || profile.userPrincipalName);
 
-    // Phase 1: scan all folders
     const folders = ["inbox", "sentitems", "archive"] as const;
     const labels = { inbox: "Inbox", sentitems: "Sent Items", archive: "Archive" } as const;
+    let foldersSucceeded = 0;
 
     for (const folder of folders) {
       _folder = labels[folder];
+
+      // Refresh token between folders in case it expired during a long scan
+      try {
+        const [freshAccount] = await db.select().from(oauthAccounts)
+          .where(eq(oauthAccounts.provider, "microsoft")).limit(1);
+        if (freshAccount) {
+          accessToken = await refreshToken(freshAccount);
+          client = new GraphClient(accessToken);
+        }
+      } catch (err) {
+        console.error(`[discover] token refresh before ${folder} failed:`, err);
+      }
+
       const params = new URLSearchParams({
         $select: "from,toRecipients,ccRecipients",
         $top: "250",
@@ -141,34 +159,43 @@ export async function startFullScan(): Promise<void> {
       });
       let url: string | null = `/me/mailFolders/${folder}/messages?${params.toString()}`;
 
-      while (url) {
-        let response;
-        try {
-          response = await client.request<{
-            value: Array<Record<string, unknown>>;
-            "@odata.nextLink"?: string;
-          }>(url);
-        } catch {
-          if (folder === "archive") break;
-          throw new Error(`Failed to scan ${labels[folder]}`);
+      try {
+        type MsgPage = { value: Array<Record<string, unknown>>; "@odata.nextLink"?: string };
+        while (url) {
+          const response: MsgPage = await client.request<MsgPage>(url);
+
+          for (const msg of response.value) {
+            _emailsScanned++;
+            processMessage(msg, userEmail);
+          }
+          url = response["@odata.nextLink"] ?? null;
         }
-        for (const msg of response.value) {
-          _emailsScanned++;
-          processMessage(msg, userEmail);
-        }
-        url = response["@odata.nextLink"] ?? null;
+        foldersSucceeded++;
+      } catch (err) {
+        console.error(`[discover] ${labels[folder]} scan failed:`, err);
+        // Don't throw — continue to next folder
+      }
+
+      // Persist after EACH folder so data is never lost
+      _folder = `Saving ${labels[folder]}...`;
+      try {
+        await persistToDatabase();
+        _domainsFound = _domainMap.size;
+        _lastScannedAt = new Date().toISOString();
+        console.log(`[discover] saved after ${labels[folder]}: ${_domainMap.size} domains`);
+      } catch (err) {
+        console.error(`[discover] persist after ${labels[folder]} failed:`, err);
       }
     }
 
-    _folder = "";
+    if (foldersSucceeded === 0) {
+      _status = "error";
+      _error = "All folders failed to scan. Check Outlook connection.";
+      _folder = "";
+      return;
+    }
 
-    // Phase 2: persist to DB
-    _folder = "Saving...";
-    await persistToDatabase();
-    _domainsFound = _domainMap.size;
-    _lastScannedAt = new Date().toISOString();
-
-    // Phase 3: AI cleanup
+    // AI cleanup
     _status = "cleaning";
     _folder = "";
     await cleanContactsWithAI();
@@ -178,6 +205,8 @@ export async function startFullScan(): Promise<void> {
     _folder = "";
   } catch (err) {
     console.error("[discover] scan failed:", err);
+    // Even on error, try to persist whatever we have
+    try { await persistToDatabase(); } catch { /* ignore */ }
     _status = "error";
     _error = err instanceof Error ? err.message : String(err);
     _folder = "";
