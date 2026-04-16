@@ -1,26 +1,23 @@
-import { NextResponse } from "next/server";
+import { NextRequest, NextResponse } from "next/server";
 import { db, discoveredDomains, discoveredContacts, ensureTables } from "@autosales/db";
 import { desc, eq, sql } from "drizzle-orm";
-import { getScanState, getLiveResults, getLiveContacts, startFullScan } from "@/lib/discover";
+import { getScanState, getLiveResults, getLiveContacts, startScan } from "@/lib/discover";
 
 export const dynamic = "force-dynamic";
 
 export async function GET() {
   const state = getScanState();
 
-  // During active scanning, return live in-memory results
+  // During scanning, return live in-memory results + saved counts
   if (state.status === "scanning") {
     return NextResponse.json({ ...state, domains: getLiveResults(), contacts: getLiveContacts() });
   }
 
-  // For all other states (idle, cleaning, done, error): serve from DB
+  // Serve from DB
   try {
     await ensureTables();
 
-    const domains = await db
-      .select()
-      .from(discoveredDomains)
-      .orderBy(desc(discoveredDomains.totalCount));
+    const domains = await db.select().from(discoveredDomains).orderBy(desc(discoveredDomains.totalCount));
 
     const contacts = await db
       .select({
@@ -44,12 +41,18 @@ export async function GET() {
         sql`COALESCE(${discoveredContacts.lastName}, '') ASC`
       );
 
-    // Last scan time
-    const lastScannedAt = state.lastScannedAt || null;
+    // Counts for status bar
+    const domainCount = domains.filter((d) => !d.excluded).length;
+    const contactCount = contacts.filter((c) => !c.excluded).length;
+    const excludedDomainCount = domains.filter((d) => d.excluded).length;
+    const excludedContactCount = contacts.filter((c) => c.excluded).length;
 
     return NextResponse.json({
       ...state,
-      lastScannedAt,
+      domainsSaved: domainCount,
+      contactsSaved: contactCount,
+      excludedDomainCount,
+      excludedContactCount,
       domains,
       contacts,
     });
@@ -64,13 +67,17 @@ export async function GET() {
   }
 }
 
-export async function POST() {
+export async function POST(request: NextRequest) {
   const state = getScanState();
   if (state.status === "scanning" || state.status === "cleaning") {
     return NextResponse.json(state);
   }
 
-  startFullScan().catch((err) => console.error("[discover] scan failed:", err));
+  // Check for forceFullScan param
+  const body = await request.json().catch(() => ({}));
+  const forceFullScan = Boolean((body as Record<string, unknown>)?.forceFullScan);
+
+  startScan(forceFullScan).catch((err) => console.error("[discover] scan failed:", err));
   await new Promise((r) => setTimeout(r, 100));
 
   return NextResponse.json(getScanState());

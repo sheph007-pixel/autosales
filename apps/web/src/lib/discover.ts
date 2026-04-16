@@ -7,8 +7,11 @@ import { extractDomain, normalizeEmail, extractNameFromEmail } from "@autosales/
 
 export interface ScanState {
   status: "idle" | "scanning" | "cleaning" | "done" | "error";
+  scanType: "full" | "quick" | null;
   emailsScanned: number;
   domainsFound: number;
+  domainsSaved: number;
+  contactsSaved: number;
   folder: string;
   cleaningProgress: string;
   error?: string;
@@ -18,14 +21,16 @@ export interface ScanState {
 // ── Module state ───────────────────────────────────────────────────
 
 let _status: ScanState["status"] = "idle";
+let _scanType: "full" | "quick" | null = null;
 let _emailsScanned = 0;
 let _domainsFound = 0;
+let _domainsSaved = 0;
+let _contactsSaved = 0;
 let _folder = "";
 let _cleaningProgress = "";
 let _error = "";
 let _lastScannedAt: string | null = null;
 
-// In-memory aggregation during scan
 interface ContactAgg { email: string; name: string; sentCount: number; receivedCount: number; }
 interface DomainAgg { sentCount: number; receivedCount: number; contacts: Map<string, ContactAgg>; }
 const _domainMap = new Map<string, DomainAgg>();
@@ -33,8 +38,11 @@ const _domainMap = new Map<string, DomainAgg>();
 export function getScanState(): ScanState {
   return {
     status: _status,
+    scanType: _scanType,
     emailsScanned: _emailsScanned,
     domainsFound: _status === "scanning" ? _domainMap.size : _domainsFound,
+    domainsSaved: _domainsSaved,
+    contactsSaved: _contactsSaved,
     folder: _folder,
     cleaningProgress: _cleaningProgress,
     error: _status === "error" ? _error : undefined,
@@ -42,7 +50,7 @@ export function getScanState(): ScanState {
   };
 }
 
-// ── Live results (during scan, from memory) ────────────────────────
+// ── Live results ───────────────────────────────────────────────────
 
 export interface LiveDomain {
   domain: string;
@@ -76,42 +84,43 @@ export function getLiveContacts(): LiveContact[] {
   const contacts: LiveContact[] = [];
   for (const [domain, agg] of _domainMap.entries()) {
     for (const c of agg.contacts.values()) {
-      contacts.push({
-        email: c.email,
-        name: c.name,
-        domain,
-        sentCount: c.sentCount,
-        receivedCount: c.receivedCount,
-      });
+      contacts.push({ email: c.email, name: c.name, domain, sentCount: c.sentCount, receivedCount: c.receivedCount });
     }
   }
   return contacts.sort((a, b) => (b.sentCount + b.receivedCount) - (a.sentCount + a.receivedCount));
 }
 
-// ── Full scan ──────────────────────────────────────────────────────
+// ── Token refresh helper ───────────────────────────────────────────
 
-async function refreshToken(account: { id: string; refreshToken: string | null; accessToken: string | null; tokenExpiresAt: Date | null }): Promise<string> {
-  let accessToken = account.accessToken!;
+async function getAccessToken(accountId: string): Promise<string> {
+  const [account] = await db.select().from(oauthAccounts).where(eq(oauthAccounts.id, accountId)).limit(1);
+  if (!account?.accessToken) throw new Error("No access token");
+
   if (account.tokenExpiresAt && account.tokenExpiresAt < new Date()) {
-    console.log("[discover] refreshing expired token");
+    console.log("[discover] refreshing token");
     const tokens = await refreshAccessToken(account.refreshToken!);
-    accessToken = tokens.access_token;
+    const newToken = tokens.access_token;
     await db.update(oauthAccounts).set({
-      accessToken: tokens.access_token,
+      accessToken: newToken,
       refreshToken: tokens.refresh_token ?? account.refreshToken,
       tokenExpiresAt: new Date(Date.now() + tokens.expires_in * 1000),
       updatedAt: new Date(),
-    }).where(eq(oauthAccounts.id, account.id));
+    }).where(eq(oauthAccounts.id, accountId));
+    return newToken;
   }
-  return accessToken;
+  return account.accessToken;
 }
 
-export async function startFullScan(): Promise<void> {
+// ── Scan ───────────────────────────────────────────────────────────
+
+export async function startScan(forceFullScan = false): Promise<void> {
   if (_status === "scanning" || _status === "cleaning") return;
 
   _status = "scanning";
   _emailsScanned = 0;
   _domainsFound = 0;
+  _domainsSaved = 0;
+  _contactsSaved = 0;
   _folder = "";
   _cleaningProgress = "";
   _error = "";
@@ -128,7 +137,18 @@ export async function startFullScan(): Promise<void> {
       return;
     }
 
-    let accessToken = await refreshToken(account);
+    // Determine scan type: full (first time) or quick (30 days)
+    const [existing] = await db.select({ count: sql<number>`count(*)::int` }).from(discoveredDomains);
+    const hasData = !forceFullScan && Number(existing?.count ?? 0) > 0;
+    _scanType = hasData ? "quick" : "full";
+
+    const dateFilter = hasData
+      ? new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString()
+      : null;
+
+    console.log(`[discover] starting ${_scanType} scan${dateFilter ? ` (since ${dateFilter})` : ""}`);
+
+    let accessToken = await getAccessToken(account.id);
     let client = new GraphClient(accessToken);
     const profile = await client.getProfile();
     const userEmail = normalizeEmail(profile.mail || profile.userPrincipalName);
@@ -140,14 +160,10 @@ export async function startFullScan(): Promise<void> {
     for (const folder of folders) {
       _folder = labels[folder];
 
-      // Refresh token between folders in case it expired during a long scan
+      // Refresh token between folders
       try {
-        const [freshAccount] = await db.select().from(oauthAccounts)
-          .where(eq(oauthAccounts.provider, "microsoft")).limit(1);
-        if (freshAccount) {
-          accessToken = await refreshToken(freshAccount);
-          client = new GraphClient(accessToken);
-        }
+        accessToken = await getAccessToken(account.id);
+        client = new GraphClient(accessToken);
       } catch (err) {
         console.error(`[discover] token refresh before ${folder} failed:`, err);
       }
@@ -155,15 +171,21 @@ export async function startFullScan(): Promise<void> {
       const params = new URLSearchParams({
         $select: "from,toRecipients,ccRecipients",
         $top: "250",
-        $orderby: "receivedDateTime desc",
       });
+
+      if (dateFilter) {
+        // Quick scan: only last 30 days — no $orderby with $filter on receivedDateTime
+        params.set("$filter", `receivedDateTime ge ${dateFilter}`);
+      } else {
+        params.set("$orderby", "receivedDateTime desc");
+      }
+
       let url: string | null = `/me/mailFolders/${folder}/messages?${params.toString()}`;
 
       try {
         type MsgPage = { value: Array<Record<string, unknown>>; "@odata.nextLink"?: string };
         while (url) {
           const response: MsgPage = await client.request<MsgPage>(url);
-
           for (const msg of response.value) {
             _emailsScanned++;
             processMessage(msg, userEmail);
@@ -173,16 +195,17 @@ export async function startFullScan(): Promise<void> {
         foldersSucceeded++;
       } catch (err) {
         console.error(`[discover] ${labels[folder]} scan failed:`, err);
-        // Don't throw — continue to next folder
       }
 
-      // Persist after EACH folder so data is never lost
+      // Persist after EACH folder
       _folder = `Saving ${labels[folder]}...`;
       try {
-        await persistToDatabase();
+        const saved = await persistToDatabase();
+        _domainsSaved = saved.domains;
+        _contactsSaved = saved.contacts;
         _domainsFound = _domainMap.size;
         _lastScannedAt = new Date().toISOString();
-        console.log(`[discover] saved after ${labels[folder]}: ${_domainMap.size} domains`);
+        console.log(`[discover] saved after ${labels[folder]}: ${saved.domains} domains, ${saved.contacts} contacts`);
       } catch (err) {
         console.error(`[discover] persist after ${labels[folder]} failed:`, err);
       }
@@ -205,15 +228,17 @@ export async function startFullScan(): Promise<void> {
     _folder = "";
   } catch (err) {
     console.error("[discover] scan failed:", err);
-    // Even on error, try to persist whatever we have
-    try { await persistToDatabase(); } catch { /* ignore */ }
+    try { await persistToDatabase(); } catch { /* best effort */ }
     _status = "error";
     _error = err instanceof Error ? err.message : String(err);
     _folder = "";
   }
 }
 
-// ── Message processing (in-memory) ────────────────────────────────
+// Keep old name as alias for API compatibility
+export const startFullScan = startScan;
+
+// ── Message processing ─────────────────────────────────────────────
 
 function processMessage(msg: Record<string, unknown>, userEmail: string) {
   const from = (msg.from as Record<string, unknown>)?.emailAddress as Record<string, unknown> | undefined;
@@ -259,15 +284,13 @@ function processMessage(msg: Record<string, unknown>, userEmail: string) {
 
 // ── Persist to DB ──────────────────────────────────────────────────
 
-async function persistToDatabase() {
+async function persistToDatabase(): Promise<{ domains: number; contacts: number }> {
   let domainsSaved = 0;
   let contactsSaved = 0;
 
   for (const [domain, agg] of _domainMap.entries()) {
     const total = agg.sentCount + agg.receivedCount;
-
     try {
-      // Upsert domain
       const rows = await db
         .insert(discoveredDomains)
         .values({ domain, sentCount: agg.sentCount, receivedCount: agg.receivedCount, totalCount: total })
@@ -286,7 +309,6 @@ async function persistToDatabase() {
       if (!domainId) continue;
       domainsSaved++;
 
-      // Upsert contacts
       for (const contact of agg.contacts.values()) {
         try {
           await db
@@ -306,7 +328,7 @@ async function persistToDatabase() {
                 receivedCount: sql`${contact.receivedCount}`,
                 updatedAt: sql`now()`,
               },
-          });
+            });
           contactsSaved++;
         } catch (err) {
           console.error(`[discover] contact upsert failed for ${contact.email}:`, err);
@@ -317,20 +339,19 @@ async function persistToDatabase() {
     }
   }
   console.log(`[discover] persisted ${domainsSaved} domains, ${contactsSaved} contacts`);
+  return { domains: domainsSaved, contacts: contactsSaved };
 }
 
 // ── AI cleanup ─────────────────────────────────────────────────────
 
 async function cleanContactsWithAI() {
-  let openai;
   try {
     const OpenAI = (await import("openai")).default;
     const apiKey = process.env.OPENAI_API_KEY || process.env.OPENAI;
     if (!apiKey) throw new Error("No OPENAI_API_KEY");
-    openai = new OpenAI({ apiKey });
-    const MODEL_MINI = "gpt-4o-mini";
+    const openai = new OpenAI({ apiKey });
+    const MODEL = "gpt-4o-mini";
 
-    // Get uncleaned contacts
     const uncleaned = await db.select({
       id: discoveredContacts.id,
       email: discoveredContacts.email,
@@ -352,16 +373,10 @@ async function cleanContactsWithAI() {
 
       try {
         const response = await openai.chat.completions.create({
-          model: MODEL_MINI,
+          model: MODEL,
           messages: [
-            {
-              role: "system",
-              content: "You extract structured contact info from email addresses and display names. Return valid JSON only.",
-            },
-            {
-              role: "user",
-              content: `For each contact, extract firstName, lastName, and company (a clean human-readable company name derived from the email domain, e.g. "advocateinsure.com" → "Advocate Insure", "healthez.com" → "HealthEZ").\n\nContacts:\n${contactList}\n\nReturn a JSON array: [{"index":1,"firstName":"...","lastName":"...","company":"..."},...]`,
-            },
+            { role: "system", content: "You extract structured contact info from email addresses and display names. Return valid JSON only." },
+            { role: "user", content: `For each contact, extract firstName, lastName, and company (a clean human-readable company name derived from the email domain, e.g. "advocateinsure.com" → "Advocate Insure", "healthez.com" → "HealthEZ").\n\nContacts:\n${contactList}\n\nReturn a JSON object: {"contacts":[{"index":1,"firstName":"...","lastName":"...","company":"..."},...]}`},
           ],
           response_format: { type: "json_object" },
           temperature: 0.1,
@@ -377,7 +392,6 @@ async function cleanContactsWithAI() {
         for (const result of results) {
           const contact = batch[result.index - 1];
           if (!contact) continue;
-
           await db.update(discoveredContacts).set({
             firstName: result.firstName || null,
             lastName: result.lastName || null,
@@ -389,7 +403,6 @@ async function cleanContactsWithAI() {
         }
       } catch (err) {
         console.error("[discover] AI batch failed:", err);
-        // Mark batch as cleaned anyway to avoid infinite retry
         for (const contact of batch) {
           await db.update(discoveredContacts).set({
             firstName: contact.rawName?.split(" ")[0] || extractNameFromEmail(contact.email).split(" ")[0] || null,
