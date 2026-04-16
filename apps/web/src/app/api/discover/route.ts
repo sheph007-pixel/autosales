@@ -1,4 +1,4 @@
-import { NextRequest, NextResponse } from "next/server";
+import { NextResponse } from "next/server";
 import { db, discoveredDomains, discoveredContacts, ensureTables } from "@autosales/db";
 import { desc, eq, sql } from "drizzle-orm";
 import { getScanState, startScan } from "@/lib/discover";
@@ -41,14 +41,11 @@ export async function GET() {
   }
 }
 
-export async function POST(request: NextRequest) {
+export async function POST() {
   const state = getScanState();
   if (state.status === "scanning" || state.status === "cleaning") return NextResponse.json(state);
 
-  const body = await request.json().catch(() => ({}));
-  const forceFullScan = Boolean((body as Record<string, unknown>)?.forceFullScan);
-
-  startScan(forceFullScan).catch((err) => console.error("[discover]", err));
+  startScan().catch((err) => console.error("[discover]", err));
   await new Promise((r) => setTimeout(r, 100));
 
   return NextResponse.json(getScanState());

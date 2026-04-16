@@ -54,6 +54,7 @@ CREATE TABLE oauth_accounts (
   token_expires_at TIMESTAMPTZ,
   email VARCHAR(255),
   delta_token TEXT,
+  scan_progress TEXT,
   last_synced_at TIMESTAMPTZ,
   created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
   updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
@@ -347,6 +348,9 @@ const GROUPS_MIGRATION_STATEMENTS = [
     updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
   )`,
   `CREATE INDEX IF NOT EXISTS idx_disc_contacts_domain ON discovered_contacts(domain_id)`,
+
+  // Resumable scan progress
+  `ALTER TABLE oauth_accounts ADD COLUMN IF NOT EXISTS scan_progress TEXT`,
 ];
 
 export async function ensureTables() {

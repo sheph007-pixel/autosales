@@ -100,14 +100,14 @@ export function DiscoverClient() {
     return () => clearInterval(id);
   }, [data.status]);
 
-  const doScan = useCallback(async (forceFullScan = false) => {
-    setData((s) => ({ ...s, status: "scanning", emailsScanned: 0, domainsFound: 0, folder: "", domains: s.domains, contacts: s.contacts }));
+  const doScan = useCallback(async () => {
+    setData((s) => ({ ...s, status: "scanning", emailsScanned: 0, folder: "", domains: s.domains, contacts: s.contacts }));
     setDomainSelected(new Set());
     setContactSelected(new Set());
     await fetch("/api/discover", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ forceFullScan }),
+      body: JSON.stringify({}),
     }).catch(() => {});
   }, []);
 
@@ -277,7 +277,7 @@ export function DiscoverClient() {
               <span className="inline-block animate-spin h-3 w-3 border-2 border-primary border-t-transparent rounded-full" />
               {isScanning && (
                 <>
-                  {data.scanType === "quick" ? "Quick scan" : "Full scan"} {data.folder}...
+                  Scanning {data.folder}...
                   {" "}{data.emailsScanned.toLocaleString()} emails
                   {(data.domainsSaved ?? 0) > 0 && <> &middot; Saved: {data.domainsSaved} domains, {data.contactsSaved} contacts</>}
                 </>
@@ -304,20 +304,12 @@ export function DiscoverClient() {
           {hasDomains && tab !== "excluded" && (
             <button onClick={doExport} className="px-3 py-1.5 border rounded text-sm hover:bg-muted">Export CSV</button>
           )}
-          {/* Scan dropdown */}
-          <div className="relative group">
+          <div>
             <button
-              onClick={() => doScan(false)}
+              onClick={() => doScan()}
               disabled={isBusy}
-              className={`px-4 py-1.5 rounded-l text-sm font-medium ${isBusy ? "bg-muted text-muted-foreground cursor-not-allowed" : "bg-primary text-primary-foreground hover:bg-primary/90"}`}
-            >{isBusy ? "Scanning..." : hasDomains ? "Quick Scan" : "Scan Mailbox"}</button>
-            {hasDomains && !isBusy && (
-              <button
-                onClick={() => doScan(true)}
-                className="px-2 py-1.5 rounded-r border-l border-primary-foreground/20 bg-primary text-primary-foreground hover:bg-primary/90 text-xs"
-                title="Full re-scan of all emails"
-              >{"\u25BE"}</button>
-            )}
+              className={`px-4 py-1.5 rounded text-sm font-medium ${isBusy ? "bg-muted text-muted-foreground cursor-not-allowed" : "bg-primary text-primary-foreground hover:bg-primary/90"}`}
+            >{isBusy ? "Scanning..." : hasDomains ? "Update" : "Scan"}</button>
           </div>
         </div>
       </div>
@@ -331,7 +323,7 @@ export function DiscoverClient() {
         <div className="flex-1 flex items-center justify-center">
           <div className="text-center">
             <p className="text-muted-foreground mb-4">Scan your Outlook mailbox to discover domains and contacts.</p>
-            <button onClick={() => doScan(false)} className="px-6 py-2 bg-primary text-primary-foreground rounded text-sm font-medium hover:bg-primary/90">Scan Mailbox</button>
+            <button onClick={() => doScan()} className="px-6 py-2 bg-primary text-primary-foreground rounded text-sm font-medium hover:bg-primary/90">Scan Mailbox</button>
           </div>
         </div>
       )}

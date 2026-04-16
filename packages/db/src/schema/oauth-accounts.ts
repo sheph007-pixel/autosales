@@ -9,6 +9,7 @@ export const oauthAccounts = pgTable("oauth_accounts", {
   tokenExpiresAt: timestamp("token_expires_at", { withTimezone: true }),
   email: varchar("email", { length: 255 }),
   deltaToken: text("delta_token"),
+  scanProgress: text("scan_progress"), // JSON: resumable scan state
   lastSyncedAt: timestamp("last_synced_at", { withTimezone: true }),
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
   updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
