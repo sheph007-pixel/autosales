@@ -351,6 +351,13 @@ const GROUPS_MIGRATION_STATEMENTS = [
 
   // Resumable scan progress
   `ALTER TABLE oauth_accounts ADD COLUMN IF NOT EXISTS scan_progress TEXT`,
+
+  // Domain enrichment columns
+  `ALTER TABLE discovered_domains ADD COLUMN IF NOT EXISTS state VARCHAR(10)`,
+  `ALTER TABLE discovered_domains ADD COLUMN IF NOT EXISTS industry VARCHAR(100)`,
+  `ALTER TABLE discovered_domains ADD COLUMN IF NOT EXISTS domain_active BOOLEAN`,
+  `ALTER TABLE discovered_domains ADD COLUMN IF NOT EXISTS company_active BOOLEAN`,
+  `ALTER TABLE discovered_domains ADD COLUMN IF NOT EXISTS enriched_at TIMESTAMPTZ`,
 ];
 
 export async function ensureTables() {

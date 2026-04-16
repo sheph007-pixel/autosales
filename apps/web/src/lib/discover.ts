@@ -6,16 +6,17 @@ import { extractDomain, normalizeEmail, extractNameFromEmail } from "@autosales/
 // ── State ──────────────────────────────────────────────────────────
 
 export interface ScanState {
-  status: "idle" | "scanning" | "cleaning" | "done" | "error";
+  status: "idle" | "scanning" | "cleaning" | "enriching" | "done" | "error";
   scanType: "full" | "quick" | null;
   emailsScanned: number;
   domainsSaved: number;
   contactsSaved: number;
   folder: string;
   cleaningProgress: string;
+  enrichProgress: string;
   error?: string;
   lastScannedAt: string | null;
-  hasProgress: boolean; // true if there's a resumable scan in DB
+  hasProgress: boolean;
 }
 
 let _status: ScanState["status"] = "idle";
@@ -23,6 +24,7 @@ let _scanType: "full" | "quick" | null = null;
 let _emailsScanned = 0;
 let _folder = "";
 let _cleaningProgress = "";
+let _enrichProgress = "";
 let _error = "";
 let _lastScannedAt: string | null = null;
 let _domainsSaved = 0;
@@ -34,6 +36,7 @@ export function getScanState(): ScanState {
     status: _status, scanType: _scanType, emailsScanned: _emailsScanned,
     domainsSaved: _domainsSaved, contactsSaved: _contactsSaved,
     folder: _folder, cleaningProgress: _cleaningProgress,
+    enrichProgress: _enrichProgress,
     error: _status === "error" ? _error : undefined,
     lastScannedAt: _lastScannedAt, hasProgress: _hasProgress,
   };
@@ -191,8 +194,14 @@ export async function startScan(): Promise<void> {
     _folder = "";
     await cleanContactsWithAI();
 
+    // Domain enrichment
+    _status = "enriching";
+    _cleaningProgress = "";
+    await enrichDomains();
+
     _status = "done";
     _cleaningProgress = "";
+    _enrichProgress = "";
     _folder = "";
     await refreshSavedCounts();
   } catch (err) {
@@ -375,5 +384,124 @@ async function cleanContactsWithAI() {
   } catch (err) {
     console.error("[discover] AI cleanup skipped:", err);
     _cleaningProgress = "AI cleanup skipped";
+  }
+}
+
+// ── Domain enrichment ──────────────────────────────────────────────
+
+async function checkDomainLive(domain: string): Promise<boolean | null> {
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 5000);
+  try {
+    const res = await fetch(`https://${domain}`, {
+      method: "HEAD",
+      signal: controller.signal,
+      redirect: "follow",
+    });
+    clearTimeout(timeout);
+    return res.status >= 200 && res.status < 400;
+  } catch {
+    clearTimeout(timeout);
+    return false;
+  }
+}
+
+// Manually-triggered enrichment (sets status for UI polling)
+export async function runEnrichment() {
+  if (_status === "scanning" || _status === "cleaning" || _status === "enriching") return;
+  _status = "enriching";
+  _enrichProgress = "";
+  try {
+    await enrichDomains();
+    _status = "done";
+    _enrichProgress = "";
+  } catch (err) {
+    console.error("[discover] runEnrichment failed:", err);
+    _status = "error";
+    _error = err instanceof Error ? err.message : String(err);
+  }
+}
+
+export async function enrichDomains() {
+  try {
+    const OpenAI = (await import("openai")).default;
+    const apiKey = process.env.OPENAI_API_KEY || process.env.OPENAI;
+    if (!apiKey) { _enrichProgress = "Enrichment skipped (no API key)"; return; }
+    const openai = new OpenAI({ apiKey });
+
+    const unenriched = await db.select({
+      id: discoveredDomains.id,
+      domain: discoveredDomains.domain,
+    }).from(discoveredDomains)
+      .where(sql`${discoveredDomains.enrichedAt} IS NULL AND ${discoveredDomains.excluded} = false`)
+      .limit(1000);
+
+    if (unenriched.length === 0) { _enrichProgress = ""; return; }
+
+    console.log(`[discover] enriching ${unenriched.length} domains`);
+    let enriched = 0;
+    const BATCH = 20;
+
+    for (let i = 0; i < unenriched.length; i += BATCH) {
+      const batch = unenriched.slice(i, i + BATCH);
+      _enrichProgress = `Enriching domains... ${enriched}/${unenriched.length}`;
+
+      // Parallel HTTP liveness checks
+      const liveness = await Promise.all(batch.map((d) => checkDomainLive(d.domain)));
+
+      // OpenAI enrichment
+      const domainList = batch.map((d, idx) => `${idx + 1}. ${d.domain}`).join("\n");
+      let results: Array<{ index: number; state: string | null; industry: string | null; companyActive: boolean | null }> = [];
+
+      try {
+        const response = await openai.chat.completions.create({
+          model: "gpt-4o-mini",
+          messages: [
+            { role: "system", content: "You identify companies from their domains. Return valid JSON only. If you don't know a company, return null for all fields." },
+            { role: "user", content: `For each domain, return what you know: US state code (2 letters like "CA", "UT"), industry (short phrase like "Insurance", "Healthcare", "Tech"), companyActive (true if still operating, false if defunct, null if unknown).\n\nDomains:\n${domainList}\n\nReturn: {"results":[{"index":1,"state":"UT","industry":"Insurance","companyActive":true},...]}\n\nUse null for unknown. Don't guess.`},
+          ],
+          response_format: { type: "json_object" },
+          temperature: 0.1,
+        });
+        const content = response.choices[0]?.message?.content;
+        if (content) {
+          const parsed = JSON.parse(content);
+          results = Array.isArray(parsed) ? parsed : parsed.results || parsed.domains || [];
+        }
+      } catch (err) {
+        console.error("[discover] enrichment batch failed:", err);
+      }
+
+      // Build result map
+      const resultMap = new Map<number, typeof results[0]>();
+      for (const r of results) resultMap.set(r.index, r);
+
+      // Update DB
+      for (let j = 0; j < batch.length; j++) {
+        const d = batch[j]!;
+        const r = resultMap.get(j + 1);
+        const isLive = liveness[j];
+        try {
+          await db.update(discoveredDomains).set({
+            state: r?.state || null,
+            industry: r?.industry || null,
+            companyActive: r?.companyActive ?? null,
+            domainActive: isLive,
+            enrichedAt: new Date(),
+            updatedAt: new Date(),
+          }).where(eq(discoveredDomains.id, d.id));
+          enriched++;
+        } catch (err) {
+          console.error(`[discover] enrich DB update failed for ${d.domain}:`, err);
+        }
+      }
+      _enrichProgress = `Enriching domains... ${enriched}/${unenriched.length}`;
+    }
+
+    _enrichProgress = `Enriched ${enriched} domains`;
+    console.log(`[discover] enrichment done: ${enriched} domains`);
+  } catch (err) {
+    console.error("[discover] enrichment failed:", err);
+    _enrichProgress = "Enrichment failed";
   }
 }

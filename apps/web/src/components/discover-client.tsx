@@ -12,6 +12,11 @@ interface Domain {
   totalCount: number;
   excluded?: boolean;
   contactCount?: number;
+  state?: string | null;
+  industry?: string | null;
+  domainActive?: boolean | null;
+  companyActive?: boolean | null;
+  enrichedAt?: string | null;
 }
 
 interface Contact {
@@ -31,7 +36,7 @@ interface Contact {
 }
 
 interface ScanData {
-  status: "idle" | "scanning" | "cleaning" | "done" | "error";
+  status: "idle" | "scanning" | "cleaning" | "enriching" | "done" | "error";
   scanType?: "full" | "quick" | null;
   emailsScanned: number;
   domainsFound: number;
@@ -41,6 +46,7 @@ interface ScanData {
   excludedContactCount?: number;
   folder: string;
   cleaningProgress: string;
+  enrichProgress?: string;
   error?: string;
   lastScannedAt: string | null;
   domains: Domain[];
@@ -48,7 +54,7 @@ interface ScanData {
 }
 
 type Tab = "domains" | "contacts" | "excluded";
-type DomainSort = "domain" | "sent" | "received" | "total";
+type DomainSort = "domain" | "sent" | "received" | "total" | "state" | "industry" | "live" | "active";
 type ContactSort = "firstName" | "lastName" | "company" | "email";
 type SortDir = "asc" | "desc";
 
@@ -93,7 +99,7 @@ export function DiscoverClient() {
   }, []);
 
   useEffect(() => {
-    if (data.status !== "scanning" && data.status !== "cleaning") return;
+    if (data.status !== "scanning" && data.status !== "cleaning" && data.status !== "enriching") return;
     const id = setInterval(() => {
       fetch("/api/discover").then((r) => r.json()).then(setData).catch(() => {});
     }, 1000);
@@ -178,7 +184,11 @@ export function DiscoverClient() {
     let list = data.domains.filter((d) => !d.excluded && !hiddenDomains.has(d.domain));
     if (search) {
       const q = search.toLowerCase();
-      list = list.filter((d) => d.domain.includes(q));
+      list = list.filter((d) =>
+        d.domain.includes(q) ||
+        (d.state?.toLowerCase() || "").includes(q) ||
+        (d.industry?.toLowerCase() || "").includes(q)
+      );
     }
     return [...list].sort((a, b) => {
       let cmp = 0;
@@ -187,6 +197,10 @@ export function DiscoverClient() {
         case "sent": cmp = a.sentCount - b.sentCount; break;
         case "received": cmp = a.receivedCount - b.receivedCount; break;
         case "total": cmp = a.totalCount - b.totalCount; break;
+        case "state": cmp = (a.state || "zz").localeCompare(b.state || "zz"); break;
+        case "industry": cmp = (a.industry || "zzz").localeCompare(b.industry || "zzz"); break;
+        case "live": cmp = Number(a.domainActive ?? -1) - Number(b.domainActive ?? -1); break;
+        case "active": cmp = Number(a.companyActive ?? -1) - Number(b.companyActive ?? -1); break;
       }
       return domainDir === "desc" ? -cmp : cmp;
     });
@@ -232,8 +246,15 @@ export function DiscoverClient() {
   const doExport = () => {
     if (tab === "domains") {
       const list = domainSelected.size > 0 ? filteredDomains.filter((d) => domainSelected.has(d.domain)) : filteredDomains;
-      const rows = [["Domain", "Sent", "Received", "Total"]];
-      for (const d of list) rows.push([d.domain, String(d.sentCount), String(d.receivedCount), String(d.totalCount)]);
+      const rows = [["Domain", "State", "Industry", "Live", "Active", "Sent", "Received", "Total"]];
+      for (const d of list) rows.push([
+        d.domain,
+        d.state || "",
+        d.industry || "",
+        d.domainActive === true ? "Yes" : d.domainActive === false ? "No" : "",
+        d.companyActive === true ? "Yes" : d.companyActive === false ? "No" : "",
+        String(d.sentCount), String(d.receivedCount), String(d.totalCount),
+      ]);
       downloadCSV(rows, "domains");
     } else {
       const list = contactSelected.size > 0 ? filteredContacts.filter((c) => contactSelected.has(c.email)) : filteredContacts;
@@ -245,7 +266,8 @@ export function DiscoverClient() {
 
   const isScanning = data.status === "scanning";
   const isCleaning = data.status === "cleaning";
-  const isBusy = isScanning || isCleaning;
+  const isEnriching = data.status === "enriching";
+  const isBusy = isScanning || isCleaning || isEnriching;
   const hasDomains = data.domains.length > 0;
   const selectedCount = tab === "domains" ? domainSelected.size : contactSelected.size;
   const savedDomains = data.domainsSaved ?? filteredDomains.length;
@@ -283,6 +305,7 @@ export function DiscoverClient() {
                 </>
               )}
               {isCleaning && <>{data.cleaningProgress || "Cleaning contacts..."}</>}
+              {isEnriching && <>{data.enrichProgress || "Enriching domains..."}</>}
             </span>
           ) : (
             <span className="text-sm text-muted-foreground">
@@ -304,12 +327,22 @@ export function DiscoverClient() {
           {hasDomains && tab !== "excluded" && (
             <button onClick={doExport} className="px-3 py-1.5 border rounded text-sm hover:bg-muted">Export CSV</button>
           )}
+          {hasDomains && !isBusy && (
+            <button
+              onClick={async () => {
+                setData((s) => ({ ...s, status: "enriching" }));
+                await fetch("/api/discover/enrich", { method: "POST" }).catch(() => {});
+              }}
+              className="px-3 py-1.5 border rounded text-sm hover:bg-muted"
+              title="Enrich domains with state, industry, liveness"
+            >Enrich</button>
+          )}
           <div>
             <button
               onClick={() => doScan()}
               disabled={isBusy}
               className={`px-4 py-1.5 rounded text-sm font-medium ${isBusy ? "bg-muted text-muted-foreground cursor-not-allowed" : "bg-primary text-primary-foreground hover:bg-primary/90"}`}
-            >{isBusy ? "Scanning..." : "Scan"}</button>
+            >{isScanning ? "Scanning..." : isCleaning ? "Cleaning..." : isEnriching ? "Enriching..." : "Scan"}</button>
           </div>
         </div>
       </div>
@@ -351,6 +384,10 @@ export function DiscoverClient() {
                     <tr>
                       <th className="p-3 w-10"><input type="checkbox" checked={filteredDomains.length > 0 && domainSelected.size === filteredDomains.length} onChange={() => { const all = filteredDomains.map((d) => d.domain); domainSelected.size === all.length ? setDomainSelected(new Set()) : setDomainSelected(new Set(all)); }} className="rounded" /></th>
                       <Th onClick={() => toggleDomainSort("domain")} label="Domain" sortKey={domainSort} thisKey="domain" dir={domainDir} />
+                      <Th onClick={() => toggleDomainSort("state")} label="State" sortKey={domainSort} thisKey="state" dir={domainDir} />
+                      <Th onClick={() => toggleDomainSort("industry")} label="Industry" sortKey={domainSort} thisKey="industry" dir={domainDir} />
+                      <Th onClick={() => toggleDomainSort("live")} label="Live" sortKey={domainSort} thisKey="live" dir={domainDir} />
+                      <Th onClick={() => toggleDomainSort("active")} label="Active" sortKey={domainSort} thisKey="active" dir={domainDir} />
                       <Th onClick={() => toggleDomainSort("sent")} label="Sent" sortKey={domainSort} thisKey="sent" dir={domainDir} right />
                       <Th onClick={() => toggleDomainSort("received")} label="Recv" sortKey={domainSort} thisKey="received" dir={domainDir} right />
                       <Th onClick={() => toggleDomainSort("total")} label="Total" sortKey={domainSort} thisKey="total" dir={domainDir} right />
@@ -359,7 +396,7 @@ export function DiscoverClient() {
                   </thead>
                   <tbody>
                     {filteredDomains.length === 0 ? (
-                      <tr><td colSpan={6} className="p-8 text-center text-muted-foreground">No domains match.</td></tr>
+                      <tr><td colSpan={10} className="p-8 text-center text-muted-foreground">No domains match.</td></tr>
                     ) : filteredDomains.slice((safePage - 1) * PAGE_SIZE, safePage * PAGE_SIZE).map((d) => {
                       const isExp = domainExpanded.has(d.domain);
                       const domainContacts = data.contacts.filter((c) => c.domain === d.domain && !c.excluded);
@@ -370,6 +407,18 @@ export function DiscoverClient() {
                             <td className="p-3"><input type="checkbox" checked={domainSelected.has(d.domain)} onChange={() => setDomainSelected((p) => { const n = new Set(p); n.has(d.domain) ? n.delete(d.domain) : n.add(d.domain); return n; })} className="rounded" /></td>
                             <td className="p-3 font-medium cursor-pointer" onClick={() => setDomainExpanded((p) => { const n = new Set(p); n.has(d.domain) ? n.delete(d.domain) : n.add(d.domain); return n; })}>
                               {d.domain} <span className="text-xs text-muted-foreground">{cc}</span>
+                            </td>
+                            <td className="p-3 text-muted-foreground">{d.state || <span className="text-muted-foreground/40">—</span>}</td>
+                            <td className="p-3 text-muted-foreground text-xs">{d.industry || <span className="text-muted-foreground/40">—</span>}</td>
+                            <td className="p-3">
+                              {d.domainActive === true ? <span className="inline-block w-2 h-2 rounded-full bg-green-500" title="Live" />
+                                : d.domainActive === false ? <span className="inline-block w-2 h-2 rounded-full bg-red-400" title="Not reachable" />
+                                : <span className="text-muted-foreground/40">—</span>}
+                            </td>
+                            <td className="p-3 text-xs">
+                              {d.companyActive === true ? <span className="text-green-700">Yes</span>
+                                : d.companyActive === false ? <span className="text-red-600">No</span>
+                                : <span className="text-muted-foreground/40">—</span>}
                             </td>
                             <td className="p-3 text-right text-muted-foreground">{d.sentCount}</td>
                             <td className="p-3 text-right text-muted-foreground">{d.receivedCount}</td>
@@ -384,7 +433,7 @@ export function DiscoverClient() {
                           {isExp && domainContacts.map((c) => (
                             <tr key={c.email} className="bg-muted/30">
                               <td className="p-3" />
-                              <td className="p-3 pl-8">
+                              <td className="p-3 pl-8" colSpan={5}>
                                 <span className="text-sm">{c.firstName || c.lastName ? `${c.firstName || ""} ${c.lastName || ""}`.trim() : c.rawName || c.name || ""}</span>
                                 <span className="text-xs text-muted-foreground ml-2">{c.email}</span>
                               </td>
