@@ -308,6 +308,7 @@ async function persistToDatabase(): Promise<{ domains: number; contacts: number 
       const domainId = rows[0]?.id;
       if (!domainId) continue;
       domainsSaved++;
+      _domainsSaved = domainsSaved;
 
       for (const contact of agg.contacts.values()) {
         try {
@@ -330,6 +331,7 @@ async function persistToDatabase(): Promise<{ domains: number; contacts: number 
               },
             });
           contactsSaved++;
+          _contactsSaved = contactsSaved;
         } catch (err) {
           console.error(`[discover] contact upsert failed for ${contact.email}:`, err);
         }

@@ -114,52 +114,47 @@ export function DiscoverClient() {
   const excludeDomain = useCallback((domainStr: string, dbId?: string) => {
     setHiddenDomains((p) => new Set(p).add(domainStr));
     setDomainSelected((p) => { const n = new Set(p); n.delete(domainStr); return n; });
-    if (dbId) {
-      fetch("/api/discover/exclude", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ type: "domain", ids: [dbId], excluded: true }),
-      }).catch(() => {});
-    }
+    // Always send domain string so it works even if DB id isn't available yet
+    fetch("/api/discover/exclude", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ type: "domain", ids: dbId ? [dbId] : [], domains: [domainStr], excluded: true }),
+    }).catch(() => {});
   }, []);
 
   const excludeContact = useCallback((email: string, dbId?: string) => {
     setData((s) => ({ ...s, contacts: s.contacts.map((c) => c.email === email ? { ...c, excluded: true } : c) }));
     setContactSelected((p) => { const n = new Set(p); n.delete(email); return n; });
-    if (dbId) {
-      fetch("/api/discover/exclude", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ type: "contact", ids: [dbId], excluded: true }),
-      }).catch(() => {});
-    }
+    fetch("/api/discover/exclude", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ type: "contact", ids: dbId ? [dbId] : [], emails: [email], excluded: true }),
+    }).catch(() => {});
   }, []);
 
   const excludeSelectedDomains = useCallback(() => {
     const sel = new Set(domainSelected);
+    const domainStrs = Array.from(sel);
     setHiddenDomains((p) => { const n = new Set(p); for (const d of sel) n.add(d); return n; });
     const dbIds = data.domains.filter((d) => d.id && sel.has(d.domain)).map((d) => d.id!);
-    if (dbIds.length > 0) {
-      fetch("/api/discover/exclude", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ type: "domain", ids: dbIds, excluded: true }),
-      }).catch(() => {});
-    }
+    fetch("/api/discover/exclude", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ type: "domain", ids: dbIds, domains: domainStrs, excluded: true }),
+    }).catch(() => {});
     setDomainSelected(new Set());
   }, [domainSelected, data.domains]);
 
   const excludeSelectedContacts = useCallback(() => {
     const sel = new Set(contactSelected);
+    const emailStrs = Array.from(sel);
     setData((s) => ({ ...s, contacts: s.contacts.map((c) => sel.has(c.email) ? { ...c, excluded: true } : c) }));
     const dbIds = data.contacts.filter((c) => c.id && sel.has(c.email)).map((c) => c.id!);
-    if (dbIds.length > 0) {
-      fetch("/api/discover/exclude", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ type: "contact", ids: dbIds, excluded: true }),
-      }).catch(() => {});
-    }
+    fetch("/api/discover/exclude", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ type: "contact", ids: dbIds, emails: emailStrs, excluded: true }),
+    }).catch(() => {});
     setContactSelected(new Set());
   }, [contactSelected, data.contacts]);
 

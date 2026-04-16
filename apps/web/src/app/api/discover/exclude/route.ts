@@ -9,27 +9,53 @@ export async function POST(request: NextRequest) {
     await ensureTables();
 
     const body = await request.json();
-    const { type, excluded } = body as { type: "domain" | "contact"; excluded: boolean; id?: string; ids?: string[] };
-
-    // Support single id or array of ids
-    const ids: string[] = body.ids ?? (body.id ? [body.id] : []);
-    if (ids.length === 0) {
-      return NextResponse.json({ error: "No ids provided" }, { status: 400 });
-    }
+    const { type, excluded } = body as {
+      type: "domain" | "contact";
+      excluded: boolean;
+      ids?: string[];
+      domains?: string[];  // exclude by domain string (works during scanning)
+      emails?: string[];   // exclude by email string (works during scanning)
+    };
 
     if (type === "domain") {
-      await db.update(discoveredDomains)
-        .set({ excluded, updatedAt: new Date() })
-        .where(inArray(discoveredDomains.id, ids));
+      // By DB id
+      const ids: string[] = body.ids ?? [];
+      if (ids.length > 0) {
+        await db.update(discoveredDomains)
+          .set({ excluded, updatedAt: new Date() })
+          .where(inArray(discoveredDomains.id, ids));
+      }
+      // By domain string (for items excluded during scan before they had IDs)
+      const domains: string[] = body.domains ?? [];
+      if (domains.length > 0) {
+        await db.update(discoveredDomains)
+          .set({ excluded, updatedAt: new Date() })
+          .where(inArray(discoveredDomains.domain, domains));
+      }
+      if (ids.length === 0 && domains.length === 0) {
+        return NextResponse.json({ error: "No ids or domains provided" }, { status: 400 });
+      }
     } else if (type === "contact") {
-      await db.update(discoveredContacts)
-        .set({ excluded, updatedAt: new Date() })
-        .where(inArray(discoveredContacts.id, ids));
+      const ids: string[] = body.ids ?? [];
+      if (ids.length > 0) {
+        await db.update(discoveredContacts)
+          .set({ excluded, updatedAt: new Date() })
+          .where(inArray(discoveredContacts.id, ids));
+      }
+      const emails: string[] = body.emails ?? [];
+      if (emails.length > 0) {
+        await db.update(discoveredContacts)
+          .set({ excluded, updatedAt: new Date() })
+          .where(inArray(discoveredContacts.email, emails));
+      }
+      if (ids.length === 0 && emails.length === 0) {
+        return NextResponse.json({ error: "No ids or emails provided" }, { status: 400 });
+      }
     } else {
       return NextResponse.json({ error: "Invalid type" }, { status: 400 });
     }
 
-    return NextResponse.json({ ok: true, count: ids.length });
+    return NextResponse.json({ ok: true });
   } catch (err) {
     return NextResponse.json(
       { error: err instanceof Error ? err.message : String(err) },
