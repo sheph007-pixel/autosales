@@ -93,33 +93,23 @@ export async function startScan(): Promise<void> {
     // Check for resumable progress
     let progress = await loadProgress(account.id);
 
-    // Determine scan type
+    // Resume or start fresh — ALWAYS full scan until all folders complete
+    _scanType = "full";
     if (progress) {
-      // Resume existing scan
-      _scanType = progress.scanType;
       _emailsScanned = progress.emailsScanned;
       _folder = `Resuming...`;
-      console.log(`[discover] resuming ${_scanType} scan from ${progress.currentFolder}, ${progress.emailsScanned} emails already done`);
+      console.log(`[discover] resuming scan from ${progress.currentFolder}, ${progress.emailsScanned} emails done`);
     } else {
-      // New scan — check if we have data (= full scan done before)
-      const [existing] = await db.select({ count: sql<number>`count(*)::int` }).from(discoveredDomains);
-      const hasData = Number(existing?.count ?? 0) > 0;
-      _scanType = hasData ? "quick" : "full";
-
       progress = {
         foldersCompleted: [],
         currentFolder: null,
         lastPageLink: null,
         emailsScanned: 0,
         startedAt: new Date().toISOString(),
-        scanType: _scanType,
+        scanType: "full",
       };
-      console.log(`[discover] starting ${_scanType} scan`);
+      console.log(`[discover] starting full scan`);
     }
-
-    const dateFilter = _scanType === "quick"
-      ? new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString()
-      : null;
 
     let accessToken = await getAccessToken(account.id);
     let client = new GraphClient(accessToken);
@@ -150,7 +140,6 @@ export async function startScan(): Promise<void> {
         console.log(`[discover] resuming ${folder} from saved page`);
       } else {
         const params = new URLSearchParams({ $select: "from,toRecipients,ccRecipients", $top: "500" });
-        if (dateFilter) params.set("$filter", `receivedDateTime ge ${dateFilter}`);
         url = `/me/mailFolders/${folder}/messages?${params.toString()}`;
       }
 

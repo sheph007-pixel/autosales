@@ -309,7 +309,7 @@ export function DiscoverClient() {
               onClick={() => doScan()}
               disabled={isBusy}
               className={`px-4 py-1.5 rounded text-sm font-medium ${isBusy ? "bg-muted text-muted-foreground cursor-not-allowed" : "bg-primary text-primary-foreground hover:bg-primary/90"}`}
-            >{isBusy ? "Scanning..." : hasDomains ? "Update" : "Scan"}</button>
+            >{isBusy ? "Scanning..." : "Scan"}</button>
           </div>
         </div>
       </div>
